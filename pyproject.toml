@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "kvadrat"
+version = "0.1.0"
+description = "Vectorizes bitmap images by converting each pixel into polygons and merging regions with the same color."
+authors = ["Koutaro Mukai <mukai.k1011k@outlook.jp>"]
+license = "GNU General Public License v3 (GPLv3)"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+pillow = "^10.4.0"
+shapely = "^2.0.6"
+
+[tool.poetry.group.dev.dependencies]
+mypy = "^1.11.2"
+black = "^24.8.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+kvadrat = "kvadrat.__main__:main"
