@@ -2,9 +2,9 @@
 
 Vectorizes bitmap images by converting each pixel into polygons and merging regions with the same color.
 
-| Bitmap                                | SVG                                   |
-| ------------------------------------- | ------------------------------------- |
-| <img src="sample.png" width="100%" /> | <img src="sample.svg" width="100%" /> |
+| Bitmap                                        | SVG                                            |
+| --------------------------------------------- | ---------------------------------------------- |
+| <img src="tests/00/input.png" width="100%" /> | <img src="tests/00/output.svg" width="100%" /> |
 
 <!--
 
