@@ -1,5 +1,7 @@
 import argparse
 import logging
+import os
+import sys
 import typing
 
 import PIL.Image  # type: ignore
@@ -42,7 +44,19 @@ def main():
 
 if __name__ == "__main__":
     logger = logging.getLogger("kvadrat")
-    logger.addHandler(logging.StreamHandler())
-    logger.setLevel(logging.DEBUG)
+    logger.addHandler(logging.StreamHandler(sys.stderr))
+    log_level = os.getenv("KVADRAT_LOG_LEVEL", "WARNING").lower()
+    logger.setLevel(
+        {
+            "critical": logging.CRITICAL,
+            "fatal": logging.CRITICAL,
+            "error": logging.ERROR,
+            "warning": logging.WARNING,
+            "warn": logging.WARNING,
+            "info": logging.INFO,
+            "debug": logging.DEBUG,
+            "notset": logging.NOTSET,
+        }.get(log_level, logging.WARNING)
+    )
 
     main()
