@@ -8,6 +8,8 @@ import shapely  # type: ignore
 from .svg import SVGRoot, SVGElement
 from .util import EPSILON
 
+_logger = logging.getLogger(__name__)
+
 RGBAColor = tuple[int, int, int, int]
 Coordinate = tuple[int, int]
 
@@ -111,8 +113,6 @@ def get_shortest_fill_attribute(color: RGBAColor) -> dict[str, str]:
 def convert_bitmap_to_svg(
     bitmap: "typing.Sequence[typing.Sequence[RGBAColor]]",
 ) -> SVGRoot:
-    logger = logging.getLogger(__name__)
-
     height = len(bitmap)
     width = len(bitmap[0]) if height > 0 else 0
     if not all(len(row) == width for row in bitmap):
@@ -125,7 +125,7 @@ def convert_bitmap_to_svg(
             raise Exception()
 
     color_map = create_color_map(bitmap)
-    logger.debug(f"{len(color_map)=}")
+    _logger.debug(f"{len(color_map)=}")
 
     polygons_attribs = [
         (
@@ -146,7 +146,7 @@ def convert_bitmap_to_svg(
         )
         for color, coords in color_map.items()
     ]
-    logger.debug(f"{len(polygons_attribs)=}")
+    _logger.debug(f"{len(polygons_attribs)=}")
 
     return SVGRoot(
         [

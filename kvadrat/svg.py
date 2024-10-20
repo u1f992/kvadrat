@@ -1,5 +1,4 @@
 import abc
-import logging
 import math
 import typing
 import xml.etree.ElementTree as ET

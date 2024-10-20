@@ -2,6 +2,8 @@ import itertools
 import typing
 import xml.etree.ElementTree as ET
 
+EPSILON = 0.0001
+
 T = typing.TypeVar
 
 
@@ -11,5 +13,3 @@ def chunked(iterable: typing.Iterable[T], n: int) -> typing.Iterable[tuple[T, ..
 
 def convert_xml_to_str(xml: ET.Element, encoding: str = "utf-8") -> str:
     return ET.tostring(xml, encoding).decode(encoding)
-
-EPSILON = 0.0001
