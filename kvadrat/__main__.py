@@ -7,7 +7,7 @@ import typing
 import PIL.Image  # type: ignore
 
 from .bitmap import convert_bitmap_to_svg, RGBAColor
-from .util import convert_xml_to_str
+import kvadrat.svg
 
 
 def main():
@@ -33,7 +33,7 @@ def main():
             for y in range(height)
         ]
     )
-    svg_str = convert_xml_to_str(svg)
+    svg_str = kvadrat.svg.str(svg)
 
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
