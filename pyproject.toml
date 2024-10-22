@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "kvadrat"
-version = "0.1.0"
+version = "0.1.1"
 description = "Vectorizes bitmap images by converting each pixel into polygons and merging regions with the same color."
 authors = ["Koutaro Mukai <mukai.k1011k@outlook.jp>"]
 license = "GNU General Public License v3 (GPLv3)"
