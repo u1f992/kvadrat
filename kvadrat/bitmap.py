@@ -119,7 +119,7 @@ def svg(
             raise RuntimeError()
 
     color_map = _create_color_map(bitmap)
-    _logger.info(f"{len(color_map)=}")
+    _logger.debug(f"{len(color_map)=}")
 
     elements: list[kvadrat.svg_.Element] = []
     for i, color_coords in enumerate(
@@ -144,6 +144,6 @@ def svg(
         )
 
         elements.append(kvadrat.svg_.Element.from_polygon(polygon, attrib))
-        _logger.info(f"{i + 1}/{len(color_map)} {color}")
+        _logger.debug(f"{i + 1}/{len(color_map)} {color}")
 
     return kvadrat.svg_.Root(elements)
