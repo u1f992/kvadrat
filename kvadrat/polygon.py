@@ -1,20 +1,95 @@
-import functools
+from __future__ import annotations
+
+import itertools
+import logging
+import math
 import typing
 
-import shapely  # type: ignore
-import shapely.geometry.base  # type: ignore
-import shapely.geometry.polygon  # type: ignore
+import shapely  # type:ignore
 
 import kvadrat.util
 
-_round = round
+_logger = logging.getLogger(__name__)
+
+BoundingBox = tuple["int | float", "int | float", "int | float", "int | float"]
 
 
-def _normalize(polygon: shapely.Polygon) -> shapely.Polygon:
-    oriented = shapely.geometry.polygon.orient(polygon, sign=1.0)
-    coords = oriented.exterior.coords
-    min_index = min(range(len(coords)), key=lambda i: coords[i])
-    return shapely.Polygon(coords[min_index:] + coords[1 : min_index + 1])
+def try_merge(
+    polygon: shapely.MultiPolygon, buffer_amount: float = 0.000001
+) -> "shapely.Polygon | shapely.MultiPolygon":
+    unified = typing.cast(
+        "shapely.Polygon | shapely.MultiPolygon",
+        shapely.union_all(polygon),  # type:ignore
+    )
+    if isinstance(unified, shapely.Polygon):
+        return unified
+
+    unified_buffered = typing.cast(
+        "shapely.Polygon | shapely.MultiPolygon",
+        shapely.union_all(polygon.buffer(buffer_amount)),  # type:ignore
+    )
+    if isinstance(unified_buffered, shapely.Polygon):
+        ndigits = -int(math.log10(buffer_amount) + 1)
+        rounded = map(
+            lambda xy: (
+                kvadrat.util.int_if_possible(round(xy[0], ndigits)),
+                kvadrat.util.int_if_possible(round(xy[1], ndigits)),
+            ),
+            unified_buffered.exterior.coords,
+        )
+        cleaned = map(lambda kg: kg[0], itertools.groupby(rounded))
+        return shapely.Polygon(cleaned)
+
+    return unified
+
+
+@typing.overload
+def normalize(
+    polygon: shapely.Polygon, tolerance: float = 0.001
+) -> shapely.Polygon: ...
+
+
+@typing.overload
+def normalize(  # type: ignore
+    # error: Overloaded function signature 2 will never be matched:
+    # signature 1's parameter type(s) are the same or broader  [misc]
+    polygon: shapely.MultiPolygon,
+    tolerance: float = 0.001,
+) -> shapely.Polygon | shapely.MultiPolygon: ...
+
+
+def normalize(
+    polygon: shapely.Polygon | shapely.MultiPolygon, tolerance: float = 0.001
+) -> shapely.Polygon | shapely.MultiPolygon:
+    if isinstance(polygon, shapely.MultiPolygon):
+        polygon = try_merge(polygon, tolerance / 1000)
+
+    # Since the result of `simplify` is influenced by the reordering done by `normalize`,
+    # `normalize` is necessary both before and after `simplify`.
+    #
+    # >>> shapely.__version__
+    # '2.0.6'
+    # >>> p=shapely.Polygon([(5,0),(10,0),(10,10),(0,10),(0,0)])
+    # >>> p.simplify(0.01).normalize()
+    # <POLYGON ((0 0, 0 10, 10 10, 10 0, 5 0, 0 0))>
+    # >>> p.normalize().simplify(0.01).normalize()
+    # <POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))>
+    normalized = (
+        typing.cast(shapely.Polygon, polygon.normalize())
+        if isinstance(polygon, shapely.Polygon)
+        else typing.cast(shapely.MultiPolygon, polygon.normalize())
+    )
+    simplified = (
+        typing.cast(shapely.Polygon, normalized.simplify(tolerance))
+        if isinstance(normalized, shapely.Polygon)
+        else typing.cast(shapely.MultiPolygon, normalized.simplify(tolerance))
+    )
+    normalized = (
+        typing.cast(shapely.Polygon, simplified.normalize())
+        if isinstance(simplified, shapely.Polygon)
+        else typing.cast(shapely.MultiPolygon, simplified.normalize())
+    )
+    return normalized
 
 
 def _are_parallel(v1: tuple[float, float], v2: tuple[float, float]) -> bool:
@@ -29,125 +104,50 @@ def _are_perpendicular(v1: tuple[float, float], v2: tuple[float, float]) -> bool
     return v1[0] * v2[0] + v1[1] * v2[1] == 0
 
 
-class Polygon:
-    @classmethod
-    def from_shapely(
-        cls, polygon: "shapely.Polygon | shapely.MultiPolygon"
-    ) -> "Polygon":
-        return Polygon(
-            map(_normalize, polygon.geoms)
-            if isinstance(polygon, shapely.MultiPolygon)
-            else [_normalize(polygon)]
-        )
-
-    def __init__(self, polygons: "typing.Iterable[shapely.Polygon]") -> None:
-        self.__polygons = tuple(polygons)
-        if len(self.__polygons) == 0:
-            raise RuntimeError()
-
-    @functools.cached_property
-    def geoms(self) -> "tuple[Polygon, ...]":
-        return tuple(
-            [self]
-            if len(self.__polygons) == 1
-            else [Polygon.from_shapely(p) for p in self.__polygons]
-        )
-
-    @functools.cached_property
-    def coords(self) -> "tuple[tuple[tuple[int | float, int | float], ...], ...]":
-        return tuple(
-            [
-                tuple(
-                    (
-                        kvadrat.util.int_if_possible(coord[0]),
-                        kvadrat.util.int_if_possible(coord[1]),
-                    )
-                    for coord in self.__polygons[0].exterior.coords
-                )
-            ]
-            if len(self.__polygons) == 1
-            else [p.coords[0] for p in self.geoms]
-        )
-
-    def round(
-        self,
-        ndigits: "int | None" = None,
-    ) -> "Polygon":
-        return Polygon.from_shapely(
-            shapely.MultiPolygon(
-                [
-                    shapely.Polygon(
-                        [(_round(x, ndigits), _round(y, ndigits)) for x, y in coords]
-                    )
-                    for coords in self.coords
-                ]
-            )
-        )
-
-    def simplify(self, tolerance: float) -> "Polygon":
-        """
-        The result of `shapely.Polygon.simplify` depends on the starting point.
-
-        ```
-        >>> shapely.__version__
-        '2.0.6'
-        >>> shapely.Polygon([(0,0),(0,5),(0,10),(10,10),(10,0)]).simplify(0.1)
-        <POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))>
-        >>> shapely.Polygon([(0,5),(0,10),(10,10),(10,0),(0,0)]).simplify(0.1)
-        <POLYGON ((0 5, 0 10, 10 10, 10 0, 0 0, 0 5))>
-        ```
-        """
-        return Polygon.from_shapely(
-            shapely.MultiPolygon(
-                [
-                    typing.cast(shapely.Polygon, p.simplify(tolerance))
-                    for p in self.__polygons
-                ]
-            )
-        )
-
-    def is_rect(self) -> bool:
-        if len(self.__polygons) != 1 or len(self.coords[0]) != 5:
-            return False
-
-        coords = self.coords[0]
-        p1, p2, p3, p4, _ = coords
-
-        vec1 = (p2[0] - p1[0], p2[1] - p1[1])
-        vec2 = (p3[0] - p2[0], p3[1] - p2[1])
-        vec3 = (p4[0] - p3[0], p4[1] - p3[1])
-        vec4 = (p1[0] - p4[0], p1[1] - p4[1])
-
-        return (
-            _are_parallel(vec1, vec3)
-            and _are_equal_length(vec1, vec3)
-            and _are_parallel(vec2, vec4)
-            and _are_equal_length(vec2, vec4)
-            and _are_perpendicular(vec1, vec2)
-        )
+@typing.overload
+def is_rect(polygon: shapely.Polygon) -> bool: ...
 
 
-def merge(
-    polygons: "typing.Iterable[Polygon]",
-    buffer_amount: float,
-) -> "Polygon":
-    """
-    `shapely.unary_union` typically does not combine polygons that only touch at a point.
+@typing.overload
+def is_rect(  # type: ignore
+    # error: Overloaded function signature 2 will never be matched:
+    # signature 1's parameter type(s) are the same or broader  [misc]
+    polygon: shapely.MultiPolygon,
+) -> typing.Literal[False]: ...
 
-    ```
-    >>> shapely.__version__
-    '2.0.6'
-    >>> polygons = [shapely.Polygon([(0, 0), (0, 1), (1, 1), (1, 0)]), shapely.Polygon([(1, 1), (1, 2), (2, 2), (2, 1)]), shapely.Polygon([(2, 2), (2, 3), (3, 3), (3, 2)])]
-    >>> shapely.unary_union(polygons)
-    <MULTIPOLYGON (((0 1, 1 1, 1 0, 0 0, 0 1)), ((2 2, 2 1, 1 1, 1 2, 2 2)), ((3...>
-    ```
-    """
-    return Polygon.from_shapely(
-        shapely.unary_union(
-            [
-                shapely.Polygon(coords).buffer(buffer_amount)
-                for polygon in polygons
-                for coords in polygon.coords
-            ]
-        ).buffer(-buffer_amount)
+
+def is_rect(polygon: shapely.Polygon | shapely.MultiPolygon) -> bool:
+    if (
+        isinstance(polygon, shapely.MultiPolygon)
+        or len(polygon.interiors) != 0
+        or len(polygon.exterior.coords) != 5
+    ):
+        return False
+
+    p1, p2, p3, p4, _ = polygon.exterior.coords
+    vec1 = p2[0] - p1[0], p2[1] - p1[1]
+    vec2 = p3[0] - p2[0], p3[1] - p2[1]
+    vec3 = p4[0] - p3[0], p4[1] - p3[1]
+    vec4 = p1[0] - p4[0], p1[1] - p4[1]
+
+    return (
+        _are_parallel(vec1, vec3)
+        and _are_equal_length(vec1, vec3)
+        and _are_parallel(vec2, vec4)
+        and _are_equal_length(vec2, vec4)
+        and _are_perpendicular(vec1, vec2)
     )
+
+
+def bbox(
+    polygon: shapely.Polygon | shapely.MultiPolygon,
+) -> BoundingBox:
+    if polygon.is_empty:
+        return 0, 0, 0, 0
+
+    min_x, min_y, max_x, max_y = polygon.bounds
+    x = kvadrat.util.int_if_possible(min_x)
+    y = kvadrat.util.int_if_possible(min_y)
+    width = kvadrat.util.int_if_possible(max_x - x)
+    height = kvadrat.util.int_if_possible(max_y - y)
+    return x, y, width, height

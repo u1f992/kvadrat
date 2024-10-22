@@ -1,10 +1,12 @@
 import itertools
+import multiprocessing
 import typing
 
 T = typing.TypeVar
 
+CPU_COUNT = multiprocessing.cpu_count()
 
-def chunked(iterable: typing.Iterable[T], n: int) -> typing.Iterable[tuple[T, ...]]:
+def chunked(iterable: typing.Iterable[typing.Any], n: int) -> typing.Iterable[tuple[typing.Any, ...]]:
     return iter(lambda: tuple(itertools.islice(iter(iterable), n)), ())
 
 

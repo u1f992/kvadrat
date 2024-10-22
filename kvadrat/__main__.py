@@ -6,8 +6,7 @@ import typing
 
 import PIL.Image  # type: ignore
 
-from .bitmap import convert_bitmap_to_svg, RGBAColor
-import kvadrat.svg
+import kvadrat
 
 
 def main():
@@ -21,11 +20,11 @@ def main():
         bitmap = bitmap.convert("RGBA")
 
     width, height = bitmap.size
-    svg = convert_bitmap_to_svg(
+    svg = kvadrat.svg(
         [
             [
                 typing.cast(
-                    RGBAColor,
+                    kvadrat.RGBAColor,
                     bitmap.getpixel((x, y)),
                 )
                 for x in range(width)
@@ -33,7 +32,7 @@ def main():
             for y in range(height)
         ]
     )
-    svg_str = kvadrat.svg.str(svg)
+    svg_str = kvadrat.str(svg)
 
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
