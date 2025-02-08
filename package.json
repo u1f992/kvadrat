@@ -1,0 +1,28 @@
+{
+  "name": "@u1f992/kvadrat",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "bin": {
+    "kvadrat": "dist/cli.js"
+  },
+  "scripts": {
+    "format": "prettier --write \"src/**/*.ts\"",
+    "build:version": "node -e \"const fs=require('node:fs');fs.writeFileSync('src/version.ts','export const VERSION=\\''+JSON.parse(fs.readFileSync('package.json',{encoding:'utf-8'})).version+'\\'',{encoding:'utf-8'})\"",
+    "build": "npm run build:version && npm run format && tsc",
+    "test": "npm run build && node --test"
+  },
+  "keywords": [],
+  "homepage": "https://github.com/u1f992/kvadrat",
+  "author": "Koutaro Mukai",
+  "license": "MIT",
+  "description": "Vectorizes bitmap images by converting each pixel into polygons and merging regions with the same color.",
+  "type": "module",
+  "dependencies": {
+    "jimp": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3"
+  }
+}
