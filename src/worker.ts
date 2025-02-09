@@ -4,26 +4,34 @@ import { ColorHex } from "./color-hex.js";
 const pointEquals = (a: [number, number], b: [number, number]) =>
   a[0] === b[0] && a[1] === b[1];
 
-export function toSVGPath(
-  hex: ColorHex,
-  edges: [[number, number], [number, number]][],
-) {
-  // Edges that exist in both directions cancel each other (connecting the rectangles)
-  for (let i = edges.length - 1; i >= 0; i--) {
-    for (let j = i - 1; j >= 0; j--) {
-      if (
-        pointEquals(edges[i]![0], edges[j]![1]) &&
-        pointEquals(edges[i]![1], edges[j]![0])
-      ) {
-        // First remove index i, it's greater than j
-        edges.splice(i, 1);
-        edges.splice(j, 1);
-        i--;
-        break;
-      }
+function removeBidirectionalEdges(edges: [number, number, number, number][]) {
+  const seen = new Map<string, number>();
+  const toRemove = new Set<number>();
+
+  for (let i = 0; i < edges.length; i++) {
+    const [x1, y1, x2, y2] = edges[i]!;
+    const key = `${x1},${y1},${x2},${y2}`;
+    const reverseKey = `${x2},${y2},${x1},${y1}`;
+
+    if (seen.has(reverseKey)) {
+      toRemove.add(i);
+      toRemove.add(seen.get(reverseKey)!);
+      seen.delete(reverseKey);
+    } else {
+      seen.set(key, i);
     }
   }
 
+  let writeIndex = 0;
+  for (let readIndex = 0; readIndex < edges.length; readIndex++) {
+    if (!toRemove.has(readIndex)) {
+      edges[writeIndex++] = edges[readIndex]!;
+    }
+  }
+  edges.length = writeIndex;
+}
+
+function buildPolygons(edges: [number, number, number, number][]) {
   const polygons: [number, number][][] = [];
   while (edges.length > 0) {
     // Pick a random edge and follow its connected edges to form a path (remove used edges)
@@ -32,36 +40,37 @@ export function toSVGPath(
     const polygon: [number, number][] = [];
     polygons.push(polygon);
     let edge = edges.splice(0, 1)[0]!;
-    polygon.push(edge[0]);
-    polygon.push(edge[1]);
+    polygon.push([edge[0], edge[1]]);
+    polygon.push([edge[2], edge[3]]);
     do {
       let foundEdge = false;
       for (let i = 0; i < edges.length; i++) {
-        if (pointEquals(edges[i]![0], edge[1])) {
-          // Found an edge that starts at the last edge's end
-          foundEdge = true;
-          edge = edges.splice(i, 1)[0]!;
-          const p1 = polygon[polygon.length - 2]!; // polygon's second-last point
-          const p2 = polygon[polygon.length - 1]!; // polygon's current end
-          const p3 = edge[1]; // new point
-          // Extend polygon end if it's continuing in the same direction
-          if (
-            p1[0] === p2[0] && // polygon ends vertical
-            p2[0] === p3[0]
-          ) {
-            // new point is vertical, too
-            polygon[polygon.length - 1]![1] = p3[1];
-          } else if (
-            p1[1] === p2[1] && // polygon ends horizontal
-            p2[1] === p3[1]
-          ) {
-            // new point is horizontal, too
-            polygon[polygon.length - 1]![0] = p3[0];
-          } else {
-            polygon.push(p3); // new direction
-          }
-          break;
+        if (!pointEquals([edges[i]![0], edges[i]![1]], [edge[2], edge[3]])) {
+          continue;
         }
+        // Found an edge that starts at the last edge's end
+        foundEdge = true;
+        edge = edges.splice(i, 1)[0]!;
+        const secondLastPoint = polygon[polygon.length - 2]!;
+        const lastPoint = polygon[polygon.length - 1]!;
+        const newPoint: [number, number] = [edge[2], edge[3]];
+        // Extend polygon end if it's continuing in the same direction
+        if (
+          secondLastPoint[0] === lastPoint[0] && // polygon ends vertical
+          lastPoint[0] === newPoint[0]
+        ) {
+          // new point is vertical, too
+          polygon[polygon.length - 1]![1] = newPoint[1];
+        } else if (
+          secondLastPoint[1] === lastPoint[1] && // polygon ends horizontal
+          lastPoint[1] === newPoint[1]
+        ) {
+          // new point is horizontal, too
+          polygon[polygon.length - 1]![0] = newPoint[0];
+        } else {
+          polygon.push(newPoint); // new direction
+        }
+        break;
       }
       if (!foundEdge) throw new Error(`no next edge found at ${edge[1]}`);
     } while (!pointEquals(polygon[polygon.length - 1]!, polygon[0]!));
@@ -85,6 +94,10 @@ export function toSVGPath(
   }
   // Repeat until there are no more unused edges
 
+  return polygons;
+}
+
+function concatPolygons(polygons: [number, number][][]) {
   // If two paths touch in at least one point, pick such a point and include one path in the other's sequence of points
   for (let i = 0; i < polygons.length; i++) {
     const polygon = polygons[i]!;
@@ -118,20 +131,37 @@ export function toSVGPath(
       }
     }
   }
+}
 
+const generateSVGPathData = (polygons: [number, number][][]) =>
   // Generate SVG path data
-  let d = "";
-  for (let i = 0; i < polygons.length; i++) {
-    const polygon = polygons[i]!;
-    d += "M" + polygon[0]![0] + "," + polygon[0]![1];
-    for (let j = 1; j < polygon.length; j++) {
-      if (polygon[j]![0] === polygon[j - 1]![0])
-        d += "v" + (polygon[j]![1] - polygon[j - 1]![1]);
-      else d += "h" + (polygon[j]![0] - polygon[j - 1]![0]);
-    }
-    d += "z";
-  }
+  polygons
+    .map(
+      (polygon) =>
+        "M" +
+        polygon[0]![0] +
+        "," +
+        polygon[0]![1] +
+        polygon
+          .slice(1)
+          .map((point, j) =>
+            point[0] === polygon[j]![0]
+              ? "v" + (point[1] - polygon[j]![1])
+              : "h" + (point[0] - polygon[j]![0]),
+          )
+          .join("") +
+        "z",
+    )
+    .join("");
 
+export function toSVGPath(
+  hex: ColorHex,
+  edges: [number, number, number, number][],
+) {
+  removeBidirectionalEdges(edges);
+  const polygons = buildPolygons(edges);
+  concatPolygons(polygons);
+  const d = generateSVGPathData(polygons);
   return `<path stroke="none" fill="${hex}" d="${d}"/>`;
 }
 
