@@ -6,6 +6,7 @@ const pointEquals = (a: [number, number], b: [number, number]) =>
   a[0] === b[0] && a[1] === b[1];
 
 function removeBidirectionalEdges(edges: [number, number, number, number][]) {
+  // Edges that exist in both directions cancel each other (connecting the rectangles)
   for (let i = edges.length - 1; i >= 0; i--) {
     for (let j = i - 1; j >= 0; j--) {
       if (
@@ -25,15 +26,7 @@ function removeBidirectionalEdges(edges: [number, number, number, number][]) {
   }
 }
 
-export function toSVGPath(
-  hex: ColorHex,
-  edges: [number, number, number, number][],
-) {
-  // Edges that exist in both directions cancel each other (connecting the rectangles)
-  measureTime(() => {
-    removeBidirectionalEdges(edges);
-  });
-
+function buildPolygons(edges: [number, number, number, number][]) {
   const polygons: [number, number][][] = [];
   while (edges.length > 0) {
     // Pick a random edge and follow its connected edges to form a path (remove used edges)
@@ -95,6 +88,22 @@ export function toSVGPath(
   }
   // Repeat until there are no more unused edges
 
+  return polygons;
+}
+
+export async function toSVGPath(
+  hex: ColorHex,
+  edges: [number, number, number, number][],
+) {
+  await measureTime(`removeBidirectionalEdges ${hex}`, () => {
+    removeBidirectionalEdges(edges);
+  });
+
+  const polygons: [number, number][][] = await measureTime(
+    `buildPolygons ${hex}`,
+    () => buildPolygons(edges),
+  );
+
   // If two paths touch in at least one point, pick such a point and include one path in the other's sequence of points
   for (let i = 0; i < polygons.length; i++) {
     const polygon = polygons[i]!;
@@ -147,5 +156,5 @@ export function toSVGPath(
 
 if (!isMainThread) {
   const { hex, edges } = workerData;
-  parentPort!.postMessage(toSVGPath(hex, edges));
+  parentPort!.postMessage(await toSVGPath(hex, edges));
 }

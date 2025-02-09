@@ -17,7 +17,7 @@ export async function toSVG(image: JimpImage) {
 
   // Mark all four edges of each square in clockwise drawing direction
   const edgesOf = new Map<ColorHex, [number, number, number, number][]>();
-  await measureTime(() => {
+  await measureTime("collectEdges", () => {
     for (let x = 0; x < image.width; x++) {
       for (let y = 0; y < image.height; y++) {
         const hex = colorHex(intToRGBA(image.getPixelColor(x, y)));

@@ -1,5 +1,9 @@
-export const measureTime = async (fn: () => void | Promise<void>) => {
+export const measureTime = async (
+  label: string,
+  fn: () => any | Promise<any>,
+) => {
   const start = process.hrtime.bigint();
-  await fn();
-  console.log(`${(process.hrtime.bigint() - start) / 1000000n} ms`);
+  const ret = await fn();
+  console.log(`${label}: ${(process.hrtime.bigint() - start) / 1000000n} ms`);
+  return ret;
 };
