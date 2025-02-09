@@ -1,6 +1,5 @@
 import { parentPort, workerData, isMainThread } from "node:worker_threads";
 import { ColorHex } from "./color-hex.js";
-import { measureTime } from "./measure-time.js";
 
 const pointEquals = (a: [number, number], b: [number, number]) =>
   a[0] === b[0] && a[1] === b[1];
@@ -133,7 +132,7 @@ function concatPolygons(polygons: [number, number][][]) {
   }
 }
 
-export async function toSVGPath(
+export function toSVGPath(
   hex: ColorHex,
   edges: [number, number, number, number][],
 ) {
@@ -159,5 +158,5 @@ export async function toSVGPath(
 
 if (!isMainThread) {
   const { hex, edges } = workerData;
-  parentPort!.postMessage(await toSVGPath(hex, edges));
+  parentPort!.postMessage(toSVGPath(hex, edges));
 }
