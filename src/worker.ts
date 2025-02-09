@@ -45,7 +45,7 @@ function buildPolygons(edges: [number, number, number, number][]) {
     do {
       let foundEdge = false;
       for (let i = 0; i < edges.length; i++) {
-        if (!(edges[i]![0] === edge[2] && edges[i]![1] === edge[3])) {
+        if (!pointEquals([edges[i]![0], edges[i]![1]], [edge[2], edge[3]])) {
           continue;
         }
         // Found an edge that starts at the last edge's end
