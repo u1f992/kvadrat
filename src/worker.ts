@@ -6,14 +6,17 @@ const pointEquals = (a: [number, number], b: [number, number]) =>
 
 export function toSVGPath(
   hex: ColorHex,
-  edges: [[number, number], [number, number]][],
+  edges: [number, number, number, number][],
 ) {
   // Edges that exist in both directions cancel each other (connecting the rectangles)
   for (let i = edges.length - 1; i >= 0; i--) {
     for (let j = i - 1; j >= 0; j--) {
       if (
-        pointEquals(edges[i]![0], edges[j]![1]) &&
-        pointEquals(edges[i]![1], edges[j]![0])
+        pointEquals(
+          [edges[i]![0], edges[i]![1]],
+          [edges[j]![2], edges[j]![3]],
+        ) &&
+        pointEquals([edges[i]![2], edges[i]![3]], [edges[j]![0], edges[j]![1]])
       ) {
         // First remove index i, it's greater than j
         edges.splice(i, 1);
@@ -32,18 +35,18 @@ export function toSVGPath(
     const polygon: [number, number][] = [];
     polygons.push(polygon);
     let edge = edges.splice(0, 1)[0]!;
-    polygon.push(edge[0]);
-    polygon.push(edge[1]);
+    polygon.push([edge[0], edge[1]]);
+    polygon.push([edge[2], edge[3]]);
     do {
       let foundEdge = false;
       for (let i = 0; i < edges.length; i++) {
-        if (pointEquals(edges[i]![0], edge[1])) {
+        if (pointEquals([edges[i]![0], edges[i]![1]], [edge[2], edge[3]])) {
           // Found an edge that starts at the last edge's end
           foundEdge = true;
           edge = edges.splice(i, 1)[0]!;
           const p1 = polygon[polygon.length - 2]!; // polygon's second-last point
           const p2 = polygon[polygon.length - 1]!; // polygon's current end
-          const p3 = edge[1]; // new point
+          const p3: [number, number] = [edge[2], edge[3]]; // new point
           // Extend polygon end if it's continuing in the same direction
           if (
             p1[0] === p2[0] && // polygon ends vertical
