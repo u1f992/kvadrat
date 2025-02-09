@@ -11,14 +11,14 @@ type JimpImage = {
 
 const WORKER = path.join(import.meta.dirname, "worker.js");
 
-export async function toSVG(image: JimpImage) {
-  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${image.width}" height="${image.height}" viewBox="0 0 ${image.width} ${image.height}">`;
+export async function toSVG({ width, height, getPixelColor }: JimpImage) {
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`;
 
   // Mark all four edges of each square in clockwise drawing direction
   const edgesOf = new Map<ColorHex, [[number, number], [number, number]][]>();
-  for (let x = 0; x < image.width; x++) {
-    for (let y = 0; y < image.height; y++) {
-      const hex = colorHex(intToRGBA(image.getPixelColor(x, y)));
+  for (let x = 0; x < width; x++) {
+    for (let y = 0; y < height; y++) {
+      const hex = colorHex(intToRGBA(getPixelColor(x, y)));
       if (!edgesOf.has(hex)) {
         edgesOf.set(hex, []);
       }
