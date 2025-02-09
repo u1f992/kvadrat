@@ -133,6 +133,27 @@ function concatPolygons(polygons: [number, number][][]) {
   }
 }
 
+const generateSVGPathData = (polygons: [number, number][][]) =>
+  // Generate SVG path data
+  polygons
+    .map(
+      (polygon) =>
+        "M" +
+        polygon[0]![0] +
+        "," +
+        polygon[0]![1] +
+        polygon
+          .slice(1)
+          .map((point, j) =>
+            point[0] === polygon[j]![0]
+              ? "v" + (point[1] - polygon[j]![1])
+              : "h" + (point[0] - polygon[j]![0]),
+          )
+          .join("") +
+        "z",
+    )
+    .join("");
+
 export function toSVGPath(
   hex: ColorHex,
   edges: [number, number, number, number][],
@@ -140,20 +161,7 @@ export function toSVGPath(
   removeBidirectionalEdges(edges);
   const polygons = buildPolygons(edges);
   concatPolygons(polygons);
-
-  // Generate SVG path data
-  let d = "";
-  for (let i = 0; i < polygons.length; i++) {
-    const polygon = polygons[i]!;
-    d += "M" + polygon[0]![0] + "," + polygon[0]![1];
-    for (let j = 1; j < polygon.length; j++) {
-      if (polygon[j]![0] === polygon[j - 1]![0])
-        d += "v" + (polygon[j]![1] - polygon[j - 1]![1]);
-      else d += "h" + (polygon[j]![0] - polygon[j - 1]![0]);
-    }
-    d += "z";
-  }
-
+  const d = generateSVGPathData(polygons);
   return `<path stroke="none" fill="${hex}" d="${d}"/>`;
 }
 
