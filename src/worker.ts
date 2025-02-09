@@ -45,31 +45,32 @@ function buildPolygons(edges: [number, number, number, number][]) {
     do {
       let foundEdge = false;
       for (let i = 0; i < edges.length; i++) {
-        if (pointEquals([edges[i]![0], edges[i]![1]], [edge[2], edge[3]])) {
-          // Found an edge that starts at the last edge's end
-          foundEdge = true;
-          edge = edges.splice(i, 1)[0]!;
-          const p1 = polygon[polygon.length - 2]!; // polygon's second-last point
-          const p2 = polygon[polygon.length - 1]!; // polygon's current end
-          const p3: [number, number] = [edge[2], edge[3]]; // new point
-          // Extend polygon end if it's continuing in the same direction
-          if (
-            p1[0] === p2[0] && // polygon ends vertical
-            p2[0] === p3[0]
-          ) {
-            // new point is vertical, too
-            polygon[polygon.length - 1]![1] = p3[1];
-          } else if (
-            p1[1] === p2[1] && // polygon ends horizontal
-            p2[1] === p3[1]
-          ) {
-            // new point is horizontal, too
-            polygon[polygon.length - 1]![0] = p3[0];
-          } else {
-            polygon.push(p3); // new direction
-          }
-          break;
+        if (!(edges[i]![0] === edge[2] && edges[i]![1] === edge[3])) {
+          continue;
         }
+        // Found an edge that starts at the last edge's end
+        foundEdge = true;
+        edge = edges.splice(i, 1)[0]!;
+        const secondLastPoint = polygon[polygon.length - 2]!;
+        const lastPoint = polygon[polygon.length - 1]!;
+        const newPoint: [number, number] = [edge[2], edge[3]];
+        // Extend polygon end if it's continuing in the same direction
+        if (
+          secondLastPoint[0] === lastPoint[0] && // polygon ends vertical
+          lastPoint[0] === newPoint[0]
+        ) {
+          // new point is vertical, too
+          polygon[polygon.length - 1]![1] = newPoint[1];
+        } else if (
+          secondLastPoint[1] === lastPoint[1] && // polygon ends horizontal
+          lastPoint[1] === newPoint[1]
+        ) {
+          // new point is horizontal, too
+          polygon[polygon.length - 1]![0] = newPoint[0];
+        } else {
+          polygon.push(newPoint); // new direction
+        }
+        break;
       }
       if (!foundEdge) throw new Error(`no next edge found at ${edge[1]}`);
     } while (!pointEquals(polygon[polygon.length - 1]!, polygon[0]!));
