@@ -3,6 +3,12 @@ import { Worker } from "node:worker_threads";
 import { intToRGBA } from "jimp";
 import { ColorHex, colorHex } from "./color-hex.js";
 
+const measureTime = (fn: () => void) => {
+  const start = process.hrtime.bigint();
+  fn();
+  console.log(`${(process.hrtime.bigint() - start) / 1000000n} ms`);
+};
+
 type JimpImage = {
   width: number;
   height: number;
@@ -16,21 +22,23 @@ export async function toSVG({ width, height, getPixelColor }: JimpImage) {
 
   // Mark all four edges of each square in clockwise drawing direction
   const edgesOf = new Map<ColorHex, [[number, number], [number, number]][]>();
-  for (let x = 0; x < width; x++) {
-    for (let y = 0; y < height; y++) {
-      const hex = colorHex(intToRGBA(getPixelColor(x, y)));
-      if (!edgesOf.has(hex)) {
-        edgesOf.set(hex, []);
-      }
-      // prettier-ignore
-      edgesOf.get(hex)!.push(
+  measureTime(() => {
+    for (let x = 0; x < width; x++) {
+      for (let y = 0; y < height; y++) {
+        const hex = colorHex(intToRGBA(getPixelColor(x, y)));
+        if (!edgesOf.has(hex)) {
+          edgesOf.set(hex, []);
+        }
+        // prettier-ignore
+        edgesOf.get(hex)!.push(
         [[x    , y    ], [x + 1, y    ]],
         [[x + 1, y    ], [x + 1, y + 1]],
         [[x + 1, y + 1], [x    , y + 1]],
         [[x    , y + 1], [x    , y    ]],
       )
+      }
     }
-  }
+  });
 
   // for (const [hex, edges] of edgesOf.entries()) {
   //   svg += toSVGPath(hex, edges);
