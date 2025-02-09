@@ -10,11 +10,10 @@ function removeBidirectionalEdges(edges: [number, number, number, number][]) {
   for (let i = edges.length - 1; i >= 0; i--) {
     for (let j = i - 1; j >= 0; j--) {
       if (
-        pointEquals(
-          [edges[i]![0], edges[i]![1]],
-          [edges[j]![2], edges[j]![3]],
-        ) &&
-        pointEquals([edges[i]![2], edges[i]![3]], [edges[j]![0], edges[j]![1]])
+        edges[i]![0] === edges[j]![2] &&
+        edges[i]![1] === edges[j]![3] &&
+        edges[i]![2] === edges[j]![0] &&
+        edges[i]![3] === edges[j]![1]
       ) {
         // First remove index i, it's greater than j
         edges.splice(i, 1);
