@@ -21,13 +21,13 @@ CPU0     Intel(R) Core(TM) Ultra 7 155U Intel64 Family 6 Model 170 Stepping 4 17
 
 Days              : 0
 Hours             : 0
-Minutes           : 13
-Seconds           : 16
-Milliseconds      : 404
-Ticks             : 7964048590
-TotalDays         : 0.00921764883101852
-TotalHours        : 0.221223571944444
-TotalMinutes      : 13.2734143166667
-TotalSeconds      : 796.404859
-TotalMilliseconds : 796404.859
+Minutes           : 0
+Seconds           : 15
+Milliseconds      : 307
+Ticks             : 153075959
+TotalDays         : 0.000177171248842593
+TotalHours        : 0.00425210997222222
+TotalMinutes      : 0.255126598333333
+TotalSeconds      : 15.3075959
+TotalMilliseconds : 15307.5959
 ```
