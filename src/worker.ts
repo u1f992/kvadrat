@@ -1,14 +1,11 @@
 import { parentPort, workerData, isMainThread } from "node:worker_threads";
 import { ColorHex } from "./color-hex.js";
+import { measureTime } from "./measure-time.js";
 
 const pointEquals = (a: [number, number], b: [number, number]) =>
   a[0] === b[0] && a[1] === b[1];
 
-export function toSVGPath(
-  hex: ColorHex,
-  edges: [number, number, number, number][],
-) {
-  // Edges that exist in both directions cancel each other (connecting the rectangles)
+function removeBidirectionalEdges(edges: [number, number, number, number][]) {
   for (let i = edges.length - 1; i >= 0; i--) {
     for (let j = i - 1; j >= 0; j--) {
       if (
@@ -26,6 +23,16 @@ export function toSVGPath(
       }
     }
   }
+}
+
+export function toSVGPath(
+  hex: ColorHex,
+  edges: [number, number, number, number][],
+) {
+  // Edges that exist in both directions cancel each other (connecting the rectangles)
+  measureTime(() => {
+    removeBidirectionalEdges(edges);
+  });
 
   const polygons: [number, number][][] = [];
   while (edges.length > 0) {
