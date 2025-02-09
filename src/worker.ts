@@ -6,24 +6,30 @@ const pointEquals = (a: [number, number], b: [number, number]) =>
   a[0] === b[0] && a[1] === b[1];
 
 function removeBidirectionalEdges(edges: [number, number, number, number][]) {
-  // Edges that exist in both directions cancel each other (connecting the rectangles)
-  for (let i = edges.length - 1; i >= 0; i--) {
-    const [startX, startY, endX, endY] = edges[i]!;
-    for (let j = i - 1; j >= 0; j--) {
-      if (
-        startX === edges[j]![2] &&
-        startY === edges[j]![3] &&
-        endX === edges[j]![0] &&
-        endY === edges[j]![1]
-      ) {
-        // First remove index i, it's greater than j
-        edges.splice(i, 1);
-        edges.splice(j, 1);
-        i--;
-        break;
-      }
+  const seen = new Map<string, number>();
+  const toRemove = new Set<number>();
+
+  for (let i = 0; i < edges.length; i++) {
+    const [x1, y1, x2, y2] = edges[i]!;
+    const key = `${x1},${y1},${x2},${y2}`;
+    const reverseKey = `${x2},${y2},${x1},${y1}`;
+
+    if (seen.has(reverseKey)) {
+      toRemove.add(i);
+      toRemove.add(seen.get(reverseKey)!);
+      seen.delete(reverseKey);
+    } else {
+      seen.set(key, i);
     }
   }
+
+  let writeIndex = 0;
+  for (let readIndex = 0; readIndex < edges.length; readIndex++) {
+    if (!toRemove.has(readIndex)) {
+      edges[writeIndex++] = edges[readIndex]!;
+    }
+  }
+  edges.length = writeIndex;
 }
 
 function buildPolygons(edges: [number, number, number, number][]) {
@@ -91,16 +97,7 @@ function buildPolygons(edges: [number, number, number, number][]) {
   return polygons;
 }
 
-export async function toSVGPath(
-  hex: ColorHex,
-  edges: [number, number, number, number][],
-) {
-  await measureTime(`removeBidirectionalEdges ${hex}`, () => {
-    removeBidirectionalEdges(edges);
-  });
-
-  const polygons = buildPolygons(edges);
-
+function concatPolygons(polygons: [number, number][][]) {
   // If two paths touch in at least one point, pick such a point and include one path in the other's sequence of points
   for (let i = 0; i < polygons.length; i++) {
     const polygon = polygons[i]!;
@@ -134,6 +131,15 @@ export async function toSVGPath(
       }
     }
   }
+}
+
+export async function toSVGPath(
+  hex: ColorHex,
+  edges: [number, number, number, number][],
+) {
+  removeBidirectionalEdges(edges);
+  const polygons = buildPolygons(edges);
+  concatPolygons(polygons);
 
   // Generate SVG path data
   let d = "";
