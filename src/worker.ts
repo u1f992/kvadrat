@@ -8,12 +8,13 @@ const pointEquals = (a: [number, number], b: [number, number]) =>
 function removeBidirectionalEdges(edges: [number, number, number, number][]) {
   // Edges that exist in both directions cancel each other (connecting the rectangles)
   for (let i = edges.length - 1; i >= 0; i--) {
+    const [startX, startY, endX, endY] = edges[i]!;
     for (let j = i - 1; j >= 0; j--) {
       if (
-        edges[i]![0] === edges[j]![2] &&
-        edges[i]![1] === edges[j]![3] &&
-        edges[i]![2] === edges[j]![0] &&
-        edges[i]![3] === edges[j]![1]
+        startX === edges[j]![2] &&
+        startY === edges[j]![3] &&
+        endX === edges[j]![0] &&
+        endY === edges[j]![1]
       ) {
         // First remove index i, it's greater than j
         edges.splice(i, 1);
@@ -98,10 +99,7 @@ export async function toSVGPath(
     removeBidirectionalEdges(edges);
   });
 
-  const polygons: [number, number][][] = await measureTime(
-    `buildPolygons ${hex}`,
-    () => buildPolygons(edges),
-  );
+  const polygons = buildPolygons(edges);
 
   // If two paths touch in at least one point, pick such a point and include one path in the other's sequence of points
   for (let i = 0; i < polygons.length; i++) {
