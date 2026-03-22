@@ -9,7 +9,7 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "build:version": "node -e \"const fs=require('node:fs');fs.writeFileSync('src/version.ts','export const VERSION=\\''+JSON.parse(fs.readFileSync('package.json',{encoding:'utf-8'})).version+'\\'',{encoding:'utf-8'})\"",
     "build": "npm run build:version && npm run format && tsc",
-    "test": "npm run build && node --test"
+    "test": "npm run build && node --test \"dist/**/*.test.js\""
   },
   "keywords": [],
   "homepage": "https://github.com/u1f992/kvadrat",

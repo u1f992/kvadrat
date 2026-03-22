@@ -5,7 +5,9 @@ import { ColorHex } from "./color-hex.js";
 const pointEquals = (a: [number, number], b: [number, number]) =>
   a[0] === b[0] && a[1] === b[1];
 
-function removeBidirectionalEdges(edges: [number, number, number, number][]) {
+export function removeBidirectionalEdges(
+  edges: [number, number, number, number][],
+) {
   const seen = new Map<string, number>();
   const toRemove = new Set<number>();
 
@@ -32,7 +34,7 @@ function removeBidirectionalEdges(edges: [number, number, number, number][]) {
   edges.length = writeIndex;
 }
 
-function buildPolygons(edges: [number, number, number, number][]) {
+export function buildPolygons(edges: [number, number, number, number][]) {
   const polygons: [number, number][][] = [];
   while (edges.length > 0) {
     // Pick a random edge and follow its connected edges to form a path (remove used edges)
@@ -98,7 +100,7 @@ function buildPolygons(edges: [number, number, number, number][]) {
   return polygons;
 }
 
-function concatPolygons(polygons: [number, number][][]) {
+export function concatPolygons(polygons: [number, number][][]) {
   // If two paths touch in at least one point, pick such a point and include one path in the other's sequence of points
   for (let i = 0; i < polygons.length; i++) {
     const polygon = polygons[i]!;
@@ -134,7 +136,7 @@ function concatPolygons(polygons: [number, number][][]) {
   }
 }
 
-const generateSVGPathData = (polygons: [number, number][][]) =>
+export const generateSVGPathData = (polygons: [number, number][][]) =>
   // Generate SVG path data
   polygons
     .map(
