@@ -63,6 +63,41 @@
 
 ### 6. `generateSVGPathData` — negligible (<2 ms)
 
+## Step 1: buildPolygons Map化
+
+線形探索+splice を Map隣接リスト+usedフラグに置換。O(E²)→O(E)。
+
+### Overall (median / mean)
+
+| Phase      |   Median |     Mean | vs Baseline |
+| ---------- | -------: | -------: | ----------: |
+| buildEdges | 2,225 ms | 2,090 ms |        +8 % |
+| workers    | 20,746ms | 23,430ms |        -1 % |
+| **total**  | 22,419ms | 25,520ms |     **-4%** |
+
+### Top 5 Slowest Colors (median)
+
+| Color       |   Edges | Polys | removeEdges | buildPolygons | concatPolygons |    Total |
+| ----------- | ------: | ----: | ----------: | ------------: | -------------: | -------: |
+| `#ffffffff` | 2296584 |   990 |    4,883 ms |        338 ms |         208 ms | 5,406 ms |
+| `#292929ff` |  970456 |   363 |    2,210 ms |         80 ms |         406 ms | 2,569 ms |
+| `#e0e0e0ff` |   85544 |   387 |      537 ms |        129 ms |          86 ms |   801 ms |
+| `#141414ff` |  230936 |   110 |      617 ms |         31 ms |          55 ms |   697 ms |
+| `#0a0a0aff` |  240572 |    62 |      653 ms |         14 ms |          16 ms |   682 ms |
+
+### 分析
+
+- **buildPolygons**: `#ffffff` 4,202ms→338ms (**12.4x高速化**)、`#e0e0e0` 2,337ms→129ms (**18.1x**)
+- 全体のtotalは-4%の微改善に留まる — **removeBidirectionalEdges がボトルネックとして浮上** (`#ffffff` 4,883ms)
+- removeBidirectionalEdgesは辺数に比例する文字列キー生成コストが支配的
+- concatPolygonsも `#292929` で406msと目立ち始めた
+- Top 3色で約8,000ms改善したにもかかわらず workers median が145msしか減っていない
+  - Workerは並列実行 (Promise.all) だが実際の並列度はCPUコア数で制限される
+  - 1466色中の大半は辺数が少なく (4〜数百)、Map構築のmicro-overheadが旧来の線形スキャンより重い可能性
+  - **spawn overhead > 処理時間となる軽量色はメインスレッドで直接実行すべき** — Worker化の損益分岐点を見極める必要がある
+
+---
+
 ## Optimization Plan (Wasm migration aware)
 
 ### Before Wasm

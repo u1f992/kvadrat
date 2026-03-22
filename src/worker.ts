@@ -35,25 +35,56 @@ export function removeBidirectionalEdges(
 }
 
 export function buildPolygons(edges: [number, number, number, number][]) {
+  // Build adjacency index: start-point -> list of edge indices
+  const adj = new Map<string, number[]>();
+  for (let i = 0; i < edges.length; i++) {
+    const key = `${edges[i]![0]},${edges[i]![1]}`;
+    let list = adj.get(key);
+    if (!list) {
+      list = [];
+      adj.set(key, list);
+    }
+    list.push(i);
+  }
+
+  const used = new Uint8Array(edges.length);
+  let remaining = edges.length;
+  // Scan pointer for finding unused starting edges
+  let startScan = 0;
+
   const polygons: [number, number][][] = [];
-  while (edges.length > 0) {
-    // Pick a random edge and follow its connected edges to form a path (remove used edges)
-    // If there are multiple connected edges, pick the first
-    // Stop when the starting point of this path is reached
+
+  while (remaining > 0) {
+    // Find an unused edge to start a new polygon
+    while (used[startScan]) startScan++;
+
     const polygon: [number, number][] = [];
     polygons.push(polygon);
-    let edge = edges.splice(0, 1)[0]!;
+
+    let edgeIdx = startScan;
+    used[edgeIdx] = 1;
+    remaining--;
+    let edge = edges[edgeIdx]!;
     polygon.push([edge[0], edge[1]]);
     polygon.push([edge[2], edge[3]]);
+
     do {
+      // Look up edges starting at the current edge's end point
+      const key = `${edge[2]},${edge[3]}`;
+      const candidates = adj.get(key);
+      if (!candidates)
+        throw new Error(`no next edge found at ${edge[2]},${edge[3]}`);
+
       let foundEdge = false;
-      for (let i = 0; i < edges.length; i++) {
-        if (!pointEquals([edges[i]![0], edges[i]![1]], [edge[2], edge[3]])) {
-          continue;
-        }
-        // Found an edge that starts at the last edge's end
+      for (let ci = 0; ci < candidates.length; ci++) {
+        const idx = candidates[ci]!;
+        if (used[idx]) continue;
+
         foundEdge = true;
-        edge = edges.splice(i, 1)[0]!;
+        used[idx] = 1;
+        remaining--;
+        edge = edges[idx]!;
+
         const secondLastPoint = polygon[polygon.length - 2]!;
         const lastPoint = polygon[polygon.length - 1]!;
         const newPoint: [number, number] = [edge[2], edge[3]];
@@ -75,7 +106,8 @@ export function buildPolygons(edges: [number, number, number, number][]) {
         }
         break;
       }
-      if (!foundEdge) throw new Error(`no next edge found at ${edge[1]}`);
+      if (!foundEdge)
+        throw new Error(`no next edge found at ${edge[2]},${edge[3]}`);
     } while (!pointEquals(polygon[polygon.length - 1]!, polygon[0]!));
 
     // Move polygon's start and end point into a corner
@@ -95,7 +127,6 @@ export function buildPolygons(edges: [number, number, number, number][]) {
       polygon[0]![0] = polygon[polygon.length - 1]![0];
     }
   }
-  // Repeat until there are no more unused edges
 
   return polygons;
 }
