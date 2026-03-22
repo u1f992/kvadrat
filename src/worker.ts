@@ -1,4 +1,5 @@
 import { parentPort, workerData, isMainThread } from "node:worker_threads";
+import { performance } from "node:perf_hooks";
 import { ColorHex } from "./color-hex.js";
 
 const pointEquals = (a: [number, number], b: [number, number]) =>
@@ -154,18 +155,64 @@ const generateSVGPathData = (polygons: [number, number][][]) =>
     )
     .join("");
 
+export type WorkerPerf = {
+  hex: string;
+  edges: number;
+  polygons: number;
+  removeEdges: number;
+  buildPolygons: number;
+  concatPolygons: number;
+  generateSVG: number;
+  total: number;
+};
+
+export function toSVGPathWithPerf(
+  hex: ColorHex,
+  edges: [number, number, number, number][],
+): { svg: string; perf: WorkerPerf } {
+  const edgeCount = edges.length;
+  const t0 = performance.now();
+
+  removeBidirectionalEdges(edges);
+  const t1 = performance.now();
+
+  const polygons = buildPolygons(edges);
+  const t2 = performance.now();
+
+  concatPolygons(polygons);
+  const t3 = performance.now();
+
+  const d = generateSVGPathData(polygons);
+  const t4 = performance.now();
+
+  return {
+    svg: `<path stroke="none" fill="${hex}" d="${d}"/>`,
+    perf: {
+      hex,
+      edges: edgeCount,
+      polygons: polygons.length,
+      removeEdges: t1 - t0,
+      buildPolygons: t2 - t1,
+      concatPolygons: t3 - t2,
+      generateSVG: t4 - t3,
+      total: t4 - t0,
+    },
+  };
+}
+
 export function toSVGPath(
   hex: ColorHex,
   edges: [number, number, number, number][],
 ) {
-  removeBidirectionalEdges(edges);
-  const polygons = buildPolygons(edges);
-  concatPolygons(polygons);
-  const d = generateSVGPathData(polygons);
-  return `<path stroke="none" fill="${hex}" d="${d}"/>`;
+  return toSVGPathWithPerf(hex, edges).svg;
 }
 
 if (!isMainThread) {
-  const { hex, edges } = workerData;
-  parentPort!.postMessage(toSVGPath(hex, edges));
+  const { hex, edges, returnPerf } = workerData;
+  if (returnPerf) {
+    const result = toSVGPathWithPerf(hex, edges);
+    parentPort!.postMessage(result);
+  } else {
+    parentPort!.postMessage(toSVGPath(hex, edges));
+  }
 }
