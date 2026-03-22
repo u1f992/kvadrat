@@ -98,6 +98,39 @@
 
 ---
 
+## Step 1.5: 軽量色のメインスレッド実行
+
+辺数 ≤ 10,000 の色は Worker を spawn せずメインスレッドで直接処理。
+
+### Overall (median / mean)
+
+| Phase      |  Median |    Mean | vs Baseline | vs Step 1 |
+| ---------- | ------: | ------: | ----------: | --------: |
+| buildEdges |  538 ms |  566 ms |       -74 % |     -76 % |
+| workers    | 3,729ms | 3,707ms |       -82 % |     -82 % |
+| **total**  | 4,221ms | 4,273ms |    **-82%** |  **-81%** |
+
+### Top 5 Slowest Colors (median)
+
+| Color       |   Edges | Polys | removeEdges | buildPolygons | concatPolygons |    Total |
+| ----------- | ------: | ----: | ----------: | ------------: | -------------: | -------: |
+| `#ffffffff` | 2296584 |   990 |    1,524 ms |         55 ms |          53 ms | 1,636 ms |
+| `#292929ff` |  970456 |   363 |      911 ms |         27 ms |          70 ms | 1,006 ms |
+| `#141414ff` |  230936 |   110 |      182 ms |         11 ms |          14 ms |   209 ms |
+| `#0a0a0aff` |  240572 |    62 |      168 ms |          7 ms |           4 ms |   181 ms |
+| `#e0e0e0ff` |   85544 |   387 |       67 ms |         45 ms |          15 ms |   121 ms |
+
+### 分析
+
+- **全体 23,431ms → 4,221ms**: ベースラインから **5.6x 高速化**
+- buildEdges が 2,067ms→538ms に改善 — Worker spawn overhead がなくなり軽量色がメインスレッドで即座に処理されたため、メインスレッドの実行時間に含まれるようになった
+- removeBidirectionalEdges が引き続き支配的 (`#ffffff` 1,524ms、`#292929` 911ms)
+- Worker数が1466→少数に激減し、Workerは重い色のみを処理
+- removeBidirectionalEdges の改善 (数値キー化等) は Wasm で吸収される見込み
+- Worker spawn を先行させメインスレッド処理を並行実行する改善を追加。メインスレッド処理(~500ms)が最遅Worker(~1,630ms)より短いため数値上の改善は軽微だが、アーキテクチャとして正しい並行化パターンを適用
+
+---
+
 ## Optimization Plan (Wasm migration aware)
 
 ### Before Wasm

@@ -3,7 +3,7 @@ import { performance } from "node:perf_hooks";
 import { Worker } from "node:worker_threads";
 import { intToRGBA } from "jimp";
 import { ColorHex, colorHex } from "./color-hex.js";
-import { WorkerPerf } from "./worker.js";
+import { toSVGPathWithPerf, WorkerPerf } from "./worker.js";
 
 type JimpImage = {
   width: number;
@@ -59,20 +59,48 @@ export async function toSVGWithPerf(
     0,
   );
 
-  const promises: Promise<{ svg: string; perf: WorkerPerf }>[] = [];
-  for (const [hex, edges] of edgesOf.entries()) {
-    promises.push(
-      new Promise((resolve, reject) => {
-        new Worker(WORKER, {
-          workerData: { hex, edges, returnPerf: true },
-        })
-          .on("message", resolve)
-          .on("error", reject);
-      }),
-    );
+  // Phase 1: Spawn workers for heavy colors first so they run in parallel
+  const WORKER_EDGE_THRESHOLD = 10000;
+  const entries = [...edgesOf.entries()];
+  const results: ({ svg: string; perf: WorkerPerf } | null)[] = new Array(
+    entries.length,
+  ).fill(null);
+  const workerSlots: {
+    index: number;
+    promise: Promise<{ svg: string; perf: WorkerPerf }>;
+  }[] = [];
+
+  for (let i = 0; i < entries.length; i++) {
+    const [hex, edges] = entries[i]!;
+    if (edges.length > WORKER_EDGE_THRESHOLD) {
+      workerSlots.push({
+        index: i,
+        promise: new Promise((resolve, reject) => {
+          new Worker(WORKER, {
+            workerData: { hex, edges, returnPerf: true },
+          })
+            .on("message", resolve)
+            .on("error", reject);
+        }),
+      });
+    }
   }
-  const results = await Promise.all(promises);
-  svg += results.map((r) => r.svg).join("");
+
+  // Phase 2: Process lightweight colors on main thread while workers run
+  for (let i = 0; i < entries.length; i++) {
+    const [hex, edges] = entries[i]!;
+    if (edges.length <= WORKER_EDGE_THRESHOLD) {
+      results[i] = toSVGPathWithPerf(hex, edges);
+    }
+  }
+
+  // Phase 3: Await worker results and fill remaining slots
+  const workerResults = await Promise.all(workerSlots.map((s) => s.promise));
+  for (let j = 0; j < workerSlots.length; j++) {
+    results[workerSlots[j]!.index] = workerResults[j]!;
+  }
+
+  svg += results.map((r) => r!.svg).join("");
   svg += "</svg>";
 
   const tTotal = performance.now();
@@ -85,7 +113,7 @@ export async function toSVGWithPerf(
       total: tTotal - t0,
       colorCount: edgesOf.size,
       edgeCount: totalEdges,
-      workerPerfs: results.map((r) => r.perf),
+      workerPerfs: results.map((r) => r!.perf),
     },
   };
 }
