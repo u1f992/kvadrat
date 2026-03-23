@@ -249,11 +249,20 @@ export function toSVGPath(hex: ColorHex, edges: Int32Array, edgeCount: number) {
 }
 
 if (!isMainThread) {
-  const { hex, edges, edgeCount, returnPerf } = workerData;
-  if (returnPerf) {
-    const result = toSVGPathWithPerf(hex, edges, edgeCount);
-    parentPort!.postMessage(result);
-  } else {
-    parentPort!.postMessage(toSVGPath(hex, edges, edgeCount));
-  }
+  parentPort!.on(
+    "message",
+    (msg: {
+      hex: ColorHex;
+      edges: Int32Array;
+      edgeCount: number;
+      returnPerf: boolean;
+    }) => {
+      if (msg.returnPerf) {
+        const result = toSVGPathWithPerf(msg.hex, msg.edges, msg.edgeCount);
+        parentPort!.postMessage(result);
+      } else {
+        parentPort!.postMessage(toSVGPath(msg.hex, msg.edges, msg.edgeCount));
+      }
+    },
+  );
 }

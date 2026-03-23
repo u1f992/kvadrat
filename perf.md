@@ -169,6 +169,37 @@
 
 ---
 
+## Step 4: Workerプール
+
+`os.cpus().length` 個の常駐Workerプール + タスクキュー方式に変更。アイドルWorkerにメッセージベースでタスクを割り当て。`worker.unref()` でプロセス終了をブロックしない。
+
+### Overall (median / mean)
+
+| Phase      |  Median |    Mean | vs Baseline | vs Step 3 |
+| ---------- | ------: | ------: | ----------: | --------: |
+| buildEdges |  654 ms |  652 ms |       -68 % |      +1 % |
+| workers    | 1,780ms | 1,804ms |       -91 % |     -19 % |
+| **total**  | 2,439ms | 2,456ms |    **-90%** |  **-15%** |
+
+### Top 5 Slowest Colors (median)
+
+| Color       |  Edges | Polys | removeEdges | buildPolygons | concatPolygons |    Total |
+| ----------- | -----: | ----: | ----------: | ------------: | -------------: | -------: |
+| `#ffffffff` | 59,106 |   990 |    1,710 ms |         26 ms |          44 ms | 1,777 ms |
+| `#292929ff` | 27,558 |   363 |      702 ms |          9 ms |          52 ms |   765 ms |
+| `#141414ff` | 11,630 |   110 |      190 ms |          4 ms |           4 ms |   197 ms |
+| `#0a0a0aff` |  7,348 |    62 |      187 ms |          2 ms |           1 ms |   191 ms |
+| `#e0e0e0ff` | 42,984 |   387 |       80 ms |         27 ms |           7 ms |   111 ms |
+
+### 分析
+
+- **全体 23,431ms → 2,439ms**: ベースラインから **9.6x 高速化**
+- Worker spawn overhead 除去で workers -19% (2,210ms→1,780ms)
+- ばらつきがさらに安定 (2,385ms〜2,624ms)
+- removeBidirectionalEdges が全体の ~70% を占有。Wasm化で吸収される部分
+
+---
+
 ## Optimization Plan (Wasm migration aware)
 
 ### Before Wasm

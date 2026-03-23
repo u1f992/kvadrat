@@ -1,17 +1,14 @@
-import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { Worker } from "node:worker_threads";
 import { intToRGBA } from "jimp";
 import { ColorHex, colorHex } from "./color-hex.js";
 import { toSVGPathWithPerf, WorkerPerf } from "./worker.js";
+import { submitTask } from "./worker-pool.js";
 
 type JimpImage = {
   width: number;
   height: number;
   getPixelColor: (x: number, y: number) => number;
 };
-
-const WORKER = path.join(import.meta.dirname, "worker.js");
 
 export type PerfResult = {
   buildEdges: number;
@@ -88,7 +85,7 @@ export async function toSVGWithPerf(
     totalEdges += count * 4;
   }
 
-  // Phase 1: Spawn workers for heavy colors first so they run in parallel
+  // Phase 1: Submit heavy colors to worker pool first so they run in parallel
   const WORKER_EDGE_THRESHOLD = 10000;
   const entries = [...edgesOf.entries()];
   const results: ({ svg: string; perf: WorkerPerf } | null)[] = new Array(
@@ -105,14 +102,7 @@ export async function toSVGWithPerf(
     if (edgeCount > WORKER_EDGE_THRESHOLD) {
       workerSlots.push({
         index: i,
-        promise: new Promise((resolve, reject) => {
-          new Worker(WORKER, {
-            workerData: { hex, edges, edgeCount, returnPerf: true },
-            transferList: [edges.buffer],
-          })
-            .on("message", resolve)
-            .on("error", reject);
-        }),
+        promise: submitTask(hex, edges, edgeCount, true),
       });
     }
   }
