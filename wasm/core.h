@@ -3,13 +3,15 @@
 
 #include <stdint.h>
 
-#define CORE_ERROR_ALLOC (-1)
-#define CORE_ERROR_CAPACITY (-2)
-#define CORE_ERROR_BROKEN_CHAIN (-3)
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+enum {
+  CORE_ERROR_ALLOC = -1,
+  CORE_ERROR_CAPACITY = -2,
+  CORE_ERROR_BROKEN_CHAIN = -3,
+};
 
 int32_t remove_bidirectional_edges(int32_t *edges, int32_t edge_count);
 
@@ -27,7 +29,7 @@ int32_t concat_polygons(int32_t *buf, int32_t buf_len, int32_t buf_capacity);
 /* Result for one color from process_image. */
 typedef struct {
   uint32_t rgba;
-  int32_t *polygons;  /* flat polygon buffer, caller must free */
+  int32_t *polygons; /* flat polygon buffer, caller must free */
   int32_t polygons_len;
 } ColorResult;
 

@@ -1,7 +1,7 @@
+#include <climits>
 #include <emscripten.h>
 #include <emscripten/bind.h>
 #include <emscripten/val.h>
-#include <climits>
 #include <vector>
 
 #include "core.h"
@@ -9,8 +9,7 @@
 using emscripten::val;
 
 val processImage(val pixelsVal, int32_t width, int32_t height) {
-  if (width <= 0 || height <= 0 ||
-      (int64_t)width * height > INT32_MAX) {
+  if (width <= 0 || height <= 0 || (int64_t)width * height > INT32_MAX) {
     return val(CORE_ERROR_CAPACITY);
   }
 

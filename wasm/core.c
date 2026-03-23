@@ -1,12 +1,4 @@
 #include "core.h"
-#ifdef __EMSCRIPTEN__
-#include <emscripten/threading.h>
-#endif
-#include <pthread.h>
-#include <stdlib.h>
-#include <string.h>
-
-#define POINT_KEY(x, y) (((uint64_t)(uint16_t)(x) << 16) | (uint16_t)(y))
 
 typedef struct {
   uint64_t key;
@@ -14,15 +6,7 @@ typedef struct {
   uint8_t occupied;
 } HashEntry;
 
-/* Encode edge coordinates as a 64-bit key. Each coordinate is truncated to
-   16 bits, limiting supported image dimensions to 65535 pixels per axis. */
-static uint64_t encode_edge_key(int32_t x1, int32_t y1, int32_t x2,
-                                int32_t y2) {
-  return ((uint64_t)(uint16_t)x1 << 48) | ((uint64_t)(uint16_t)y1 << 32) |
-         ((uint64_t)(uint16_t)x2 << 16) | (uint16_t)y2;
-}
-
-static uint64_t hash64(uint64_t key) {
+static inline uint64_t hash64(uint64_t key) {
   key ^= key >> 33;
   key *= 0xff51afd7ed558ccdULL;
   key ^= key >> 33;
@@ -31,8 +15,8 @@ static uint64_t hash64(uint64_t key) {
   return key;
 }
 
-static int32_t hash_find(const HashEntry *table, int32_t capacity,
-                         uint64_t key) {
+static inline int32_t hash_find(const HashEntry *table, int32_t capacity,
+                                uint64_t key) {
   if (capacity <= 0)
     return -1;
   int32_t idx = (int32_t)(hash64(key) % (uint64_t)capacity);
@@ -45,8 +29,8 @@ static int32_t hash_find(const HashEntry *table, int32_t capacity,
   return -1;
 }
 
-static int32_t hash_insert(HashEntry *table, int32_t capacity, uint64_t key,
-                           int32_t value) {
+static inline int32_t hash_insert(HashEntry *table, int32_t capacity,
+                                  uint64_t key, int32_t value) {
   if (capacity <= 0)
     return -1;
   int32_t idx = (int32_t)(hash64(key) % (uint64_t)capacity);
@@ -62,7 +46,8 @@ static int32_t hash_insert(HashEntry *table, int32_t capacity, uint64_t key,
   return idx;
 }
 
-static void hash_remove(HashEntry *table, int32_t capacity, int32_t idx) {
+static inline void hash_remove(HashEntry *table, int32_t capacity,
+                               int32_t idx) {
   if (capacity <= 0)
     return;
   table[idx].occupied = 0;
@@ -76,6 +61,25 @@ static void hash_remove(HashEntry *table, int32_t capacity, int32_t idx) {
     hash_insert(table, capacity, k, v);
     next = (next + 1) % capacity;
   }
+}
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten/threading.h>
+#endif
+#include <pthread.h>
+#include <stdlib.h>
+#include <string.h>
+
+static inline uint64_t point_key(int32_t x, int32_t y) {
+  return ((uint64_t)(uint16_t)x << 16) | (uint16_t)y;
+}
+
+/* Encode edge coordinates as a 64-bit key. Each coordinate is truncated to
+   16 bits, limiting supported image dimensions to 65535 pixels per axis. */
+static inline uint64_t encode_edge_key(int32_t x1, int32_t y1, int32_t x2,
+                                       int32_t y2) {
+  return ((uint64_t)(uint16_t)x1 << 48) | ((uint64_t)(uint16_t)y1 << 32) |
+         ((uint64_t)(uint16_t)x2 << 16) | (uint16_t)y2;
 }
 
 int32_t remove_bidirectional_edges(int32_t *edges, int32_t edge_count) {
@@ -132,6 +136,16 @@ int32_t remove_bidirectional_edges(int32_t *edges, int32_t edge_count) {
   return write_index;
 }
 
+/* Append a point to the output buffer. Returns 0 on success, -1 if full. */
+static inline int32_t emit_point(int32_t *out, int32_t *out_pos,
+                                 int32_t out_capacity, int32_t x, int32_t y) {
+  if (*out_pos + 2 > out_capacity)
+    return -1;
+  out[(*out_pos)++] = x;
+  out[(*out_pos)++] = y;
+  return 0;
+}
+
 int32_t build_polygons(const int32_t *edges, int32_t edge_count, int32_t *out,
                        int32_t out_capacity) {
   if (edge_count <= 0) {
@@ -155,7 +169,7 @@ int32_t build_polygons(const int32_t *edges, int32_t edge_count, int32_t *out,
 
   for (int32_t i = 0; i < edge_count; i++) {
     int32_t off = i * 4;
-    uint64_t key = POINT_KEY(edges[off], edges[off + 1]);
+    uint64_t key = point_key(edges[off], edges[off + 1]);
     int32_t found = hash_find(adj, adj_capacity, key);
     if (found >= 0) {
       /* Prepend to existing linked list */
@@ -193,29 +207,21 @@ int32_t build_polygons(const int32_t *edges, int32_t edge_count, int32_t *out,
     int32_t cur_x = edges[off + 2];
     int32_t cur_y = edges[off + 3];
 
-/* Helper: append point to output, checking capacity */
-#define EMIT_POINT(px, py)                                                     \
-  do {                                                                         \
-    if (out_pos + 2 > out_capacity) {                                          \
-      free(adj);                                                               \
-      free(next_same_start);                                                   \
-      free(used);                                                              \
-      return CORE_ERROR_CAPACITY;                                              \
-    }                                                                          \
-    out[out_pos++] = (px);                                                     \
-    out[out_pos++] = (py);                                                     \
-    point_count++;                                                             \
-  } while (0)
-
-    EMIT_POINT(first_x, first_y);
-    EMIT_POINT(cur_x, cur_y);
+    if (emit_point(out, &out_pos, out_capacity, first_x, first_y) < 0 ||
+        emit_point(out, &out_pos, out_capacity, cur_x, cur_y) < 0) {
+      free(adj);
+      free(next_same_start);
+      free(used);
+      return CORE_ERROR_CAPACITY;
+    }
+    point_count += 2;
 
     /* Track last two points for collinear merging */
     int32_t prev_x = first_x, prev_y = first_y;
     int32_t last_x = cur_x, last_y = cur_y;
 
     do {
-      uint64_t key = POINT_KEY(cur_x, cur_y);
+      uint64_t key = point_key(cur_x, cur_y);
       int32_t slot = hash_find(adj, adj_capacity, key);
       int32_t found_edge = -1;
 
@@ -260,7 +266,13 @@ int32_t build_polygons(const int32_t *edges, int32_t edge_count, int32_t *out,
         prev_y = last_y;
         last_x = new_x;
         last_y = new_y;
-        EMIT_POINT(new_x, new_y);
+        if (emit_point(out, &out_pos, out_capacity, new_x, new_y) < 0) {
+          free(adj);
+          free(next_same_start);
+          free(used);
+          return CORE_ERROR_CAPACITY;
+        }
+        point_count++;
       }
 
       cur_x = new_x;
@@ -289,8 +301,6 @@ int32_t build_polygons(const int32_t *edges, int32_t edge_count, int32_t *out,
       out[count_pos + 1] = pn_x; /* adjust first point's x */
     }
 
-#undef EMIT_POINT
-
     out[count_pos] = point_count;
   }
 
@@ -301,7 +311,8 @@ int32_t build_polygons(const int32_t *edges, int32_t edge_count, int32_t *out,
 }
 
 /* Helper: get the start offset of the n-th polygon in a flat buffer. */
-static int32_t poly_offset(const int32_t *buf, int32_t buf_len, int32_t index) {
+static inline int32_t poly_offset(const int32_t *buf, int32_t buf_len,
+                                  int32_t index) {
   int32_t pos = 0;
   for (int32_t i = 0; i < index; i++) {
     if (pos >= buf_len)
@@ -313,7 +324,7 @@ static int32_t poly_offset(const int32_t *buf, int32_t buf_len, int32_t index) {
 }
 
 /* Helper: count polygons in a flat buffer. */
-static int32_t poly_count(const int32_t *buf, int32_t buf_len) {
+static inline int32_t poly_count(const int32_t *buf, int32_t buf_len) {
   int32_t count = 0;
   int32_t pos = 0;
   while (pos < buf_len) {
@@ -330,8 +341,7 @@ int32_t concat_polygons(int32_t *buf, int32_t buf_len, int32_t buf_capacity) {
     return buf_len;
 
   /* Build offset index for O(1) polygon access */
-  int32_t *offsets =
-      (int32_t *)malloc((size_t)num_polys * sizeof(int32_t));
+  int32_t *offsets = (int32_t *)malloc((size_t)num_polys * sizeof(int32_t));
   if (!offsets)
     return CORE_ERROR_ALLOC;
   {
@@ -365,8 +375,7 @@ int32_t concat_polygons(int32_t *buf, int32_t buf_len, int32_t buf_capacity) {
             continue;
 
           /* Save polygon k's points to a temp buffer */
-          int32_t *k_copy =
-              (int32_t *)malloc((size_t)k_size * sizeof(int32_t));
+          int32_t *k_copy = (int32_t *)malloc((size_t)k_size * sizeof(int32_t));
           if (!k_copy) {
             free(offsets);
             return CORE_ERROR_ALLOC;
@@ -433,7 +442,7 @@ int32_t concat_polygons(int32_t *buf, int32_t buf_len, int32_t buf_capacity) {
 }
 
 /* Pack RGBA bytes into a uint32 key. */
-static uint32_t rgba_key(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+static inline uint32_t rgba_key(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
   return ((uint32_t)r << 24) | ((uint32_t)g << 16) | ((uint32_t)b << 8) | a;
 }
 
@@ -494,13 +503,11 @@ static void *pipeline_worker(void *arg) {
 }
 
 /* Cleanup helper for process_image error paths. */
-static inline void pipeline_error_cleanup(int32_t **edge_bufs,
-                                          int32_t first_edge,
-                                          int32_t num_colors,
-                                          ColorResult *out_results,
-                                          int32_t completed_colors,
-                                          int32_t *edge_offsets,
-                                          uint32_t *color_list) {
+static inline void
+pipeline_error_cleanup(int32_t **edge_bufs, int32_t first_edge,
+                       int32_t num_colors, ColorResult *out_results,
+                       int32_t completed_colors, int32_t *edge_offsets,
+                       uint32_t *color_list) {
   for (int32_t j = first_edge; j < num_colors; j++)
     free(edge_bufs[j]);
   for (int32_t j = 0; j < completed_colors; j++)
@@ -536,8 +543,7 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
       (int32_t **)calloc((size_t)out_capacity, sizeof(int32_t *));
   int32_t *edge_offsets =
       (int32_t *)calloc((size_t)out_capacity, sizeof(int32_t));
-  int32_t *edge_caps =
-      (int32_t *)calloc((size_t)out_capacity, sizeof(int32_t));
+  int32_t *edge_caps = (int32_t *)calloc((size_t)out_capacity, sizeof(int32_t));
 
   if (!color_list || !edge_bufs || !edge_offsets || !edge_caps) {
     free(color_table);
@@ -548,7 +554,7 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
     return CORE_ERROR_ALLOC;
   }
 
-#define INITIAL_EDGE_CAP 256 /* 16 pixels worth of edges (16 ints each) */
+  static const int32_t initial_edge_cap = 256; /* 16 pixels worth */
 
   /* Single pass: classify colors and build edges simultaneously */
   for (int32_t y = 0; y < height; y++) {
@@ -576,8 +582,7 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
         c = num_colors;
         hash_insert(color_table, color_cap, key, c);
         color_list[c] = rgba;
-        edge_bufs[c] =
-            (int32_t *)malloc(INITIAL_EDGE_CAP * sizeof(int32_t));
+        edge_bufs[c] = (int32_t *)malloc(initial_edge_cap * sizeof(int32_t));
         if (!edge_bufs[c]) {
           for (int32_t j = 0; j < c; j++)
             free(edge_bufs[j]);
@@ -588,7 +593,7 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
           free(edge_caps);
           return CORE_ERROR_ALLOC;
         }
-        edge_caps[c] = INITIAL_EDGE_CAP;
+        edge_caps[c] = initial_edge_cap;
         num_colors++;
       }
 
@@ -598,8 +603,8 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
         int32_t new_cap = edge_caps[c] + edge_caps[c] / 2;
         if (new_cap < needed)
           new_cap = needed;
-        int32_t *new_buf = (int32_t *)realloc(
-            edge_bufs[c], (size_t)new_cap * sizeof(int32_t));
+        int32_t *new_buf =
+            (int32_t *)realloc(edge_bufs[c], (size_t)new_cap * sizeof(int32_t));
         if (!new_buf) {
           for (int32_t j = 0; j < num_colors; j++)
             free(edge_bufs[j]);
@@ -635,8 +640,6 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
       edge_offsets[c] = off;
     }
   }
-
-#undef INITIAL_EDGE_CAP
 
   free(color_table);
   free(edge_caps);
