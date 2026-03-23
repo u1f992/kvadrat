@@ -23,6 +23,7 @@
   "devDependencies": {
     "@types/node": "^22.13.1",
     "prettier": "^3.4.2",
+    "puppeteer": "^24.40.0",
     "typescript": "^5.7.3"
   }
 }
