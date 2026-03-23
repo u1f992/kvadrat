@@ -7,138 +7,52 @@ import createModule from "./wasm/core.js";
 export const PERF_SYMBOL: unique symbol = Symbol("perf");
 
 const wasmModule = await createModule();
-const wasmRemoveBidirectionalEdges: (
+
+const wasmRemoveBidirectionalEdges: (ptr: number, count: number) => number =
+  wasmModule.cwrap("remove_bidirectional_edges", "number", [
+    "number",
+    "number",
+  ]);
+
+const wasmBuildPolygons: (
   edgesPtr: number,
   edgeCount: number,
-) => number = wasmModule.cwrap("remove_bidirectional_edges", "number", [
+  outPtr: number,
+  outCapacity: number,
+) => number = wasmModule.cwrap("build_polygons", "number", [
+  "number",
+  "number",
   "number",
   "number",
 ]);
 
+const wasmConcatPolygons: (bufPtr: number, bufLen: number) => number =
+  wasmModule.cwrap("concat_polygons", "number", ["number", "number"]);
+
 const pointEquals = (a: [number, number], b: [number, number]) =>
   a[0] === b[0] && a[1] === b[1];
 
-/**
- * Remove bidirectional edge pairs in-place. Returns the new edge count.
- * Edges are stored as a flat Int32Array with stride 4: [x1,y1,x2,y2, ...].
- */
-export function removeBidirectionalEdges(
-  edges: Int32Array,
-  edgeCount: number,
-): number {
-  if (edgeCount <= 0) return 0;
-  const byteLength = edgeCount * 4 * 4; // 4 ints per edge, 4 bytes per int
-  const ptr = wasmModule._malloc(byteLength);
-  if (!ptr) throw new Error("wasm malloc failed");
-  try {
-    wasmModule.HEAP32.set(edges.subarray(0, edgeCount * 4), ptr / 4);
-    const newCount = wasmRemoveBidirectionalEdges(ptr, edgeCount);
-    if (newCount < 0) throw new Error("wasm remove_bidirectional_edges failed");
-    const result = wasmModule.HEAP32.subarray(ptr / 4, ptr / 4 + newCount * 4);
-    edges.set(result);
-    return newCount;
-  } finally {
-    wasmModule._free(ptr);
-  }
-}
-
-export function buildPolygons(edges: Int32Array, edgeCount: number) {
-  // Build adjacency index: start-point -> list of edge indices
-  const adj = new Map<string, number[]>();
-  for (let i = 0; i < edgeCount; i++) {
-    const off = i * 4;
-    const key = `${edges[off]},${edges[off + 1]}`;
-    let list = adj.get(key);
-    if (!list) {
-      list = [];
-      adj.set(key, list);
-    }
-    list.push(i);
-  }
-
-  const used = new Uint8Array(edgeCount);
-  let remaining = edgeCount;
-  let startScan = 0;
-
+/** Parse flat polygon buffer into JS polygon arrays. */
+function parseFlatPolygons(
+  buf: Int32Array,
+  bufLen: number,
+): [number, number][][] {
   const polygons: [number, number][][] = [];
-
-  while (remaining > 0) {
-    while (used[startScan]) startScan++;
-
+  let pos = 0;
+  while (pos < bufLen) {
+    const pc = buf[pos]!;
+    pos++;
     const polygon: [number, number][] = [];
-    polygons.push(polygon);
-
-    let edgeIdx = startScan;
-    used[edgeIdx] = 1;
-    remaining--;
-    let off = edgeIdx * 4;
-    let ex1 = edges[off]!;
-    let ey1 = edges[off + 1]!;
-    let ex2 = edges[off + 2]!;
-    let ey2 = edges[off + 3]!;
-    polygon.push([ex1, ey1]);
-    polygon.push([ex2, ey2]);
-
-    do {
-      const key = `${ex2},${ey2}`;
-      const candidates = adj.get(key);
-      if (!candidates) throw new Error(`no next edge found at ${ex2},${ey2}`);
-
-      let foundEdge = false;
-      for (let ci = 0; ci < candidates.length; ci++) {
-        const idx = candidates[ci]!;
-        if (used[idx]) continue;
-
-        foundEdge = true;
-        used[idx] = 1;
-        remaining--;
-        off = idx * 4;
-        ex1 = edges[off]!;
-        ey1 = edges[off + 1]!;
-        ex2 = edges[off + 2]!;
-        ey2 = edges[off + 3]!;
-
-        const secondLastPoint = polygon[polygon.length - 2]!;
-        const lastPoint = polygon[polygon.length - 1]!;
-        // Extend polygon end if it's continuing in the same direction
-        if (
-          secondLastPoint[0] === lastPoint[0] && // polygon ends vertical
-          lastPoint[0] === ex2
-        ) {
-          polygon[polygon.length - 1]![1] = ey2;
-        } else if (
-          secondLastPoint[1] === lastPoint[1] && // polygon ends horizontal
-          lastPoint[1] === ey2
-        ) {
-          polygon[polygon.length - 1]![0] = ex2;
-        } else {
-          polygon.push([ex2, ey2]);
-        }
-        break;
-      }
-      if (!foundEdge) throw new Error(`no next edge found at ${ex2},${ey2}`);
-    } while (!pointEquals(polygon[polygon.length - 1]!, polygon[0]!));
-
-    // Move polygon's start and end point into a corner
-    if (
-      polygon[0]![0] === polygon[1]![0] &&
-      polygon[polygon.length - 2]![0] === polygon[polygon.length - 1]![0]
-    ) {
-      polygon.length--;
-      polygon[0]![1] = polygon[polygon.length - 1]![1];
-    } else if (
-      polygon[0]![1] === polygon[1]![1] &&
-      polygon[polygon.length - 2]![1] === polygon[polygon.length - 1]![1]
-    ) {
-      polygon.length--;
-      polygon[0]![0] = polygon[polygon.length - 1]![0];
+    for (let i = 0; i < pc; i++) {
+      polygon.push([buf[pos + i * 2]!, buf[pos + i * 2 + 1]!]);
     }
+    pos += pc * 2;
+    polygons.push(polygon);
   }
-
   return polygons;
 }
 
-export function concatPolygons(polygons: [number, number][][]) {
+function concatPolygons(polygons: [number, number][][]) {
   for (let i = 0; i < polygons.length; i++) {
     const polygon = polygons[i]!;
     for (let j = 0; j < polygon.length; j++) {
@@ -170,8 +84,8 @@ export function concatPolygons(polygons: [number, number][][]) {
   }
 }
 
-export const generateSVGPathData = (polygons: [number, number][][]) =>
-  polygons
+function generateSVGPathData(polygons: [number, number][][]): string {
+  return polygons
     .map(
       (polygon) =>
         "M" +
@@ -189,6 +103,7 @@ export const generateSVGPathData = (polygons: [number, number][][]) =>
         "z",
     )
     .join("");
+}
 
 export type WorkerPerf = {
   hex: string;
@@ -206,25 +121,68 @@ export type PerfContext = {
   polygonCount: number;
 };
 
+/**
+ * Process edges through the full Wasm pipeline and generate an SVG path element.
+ */
 export function toSVGPath(
   hex: ColorHex,
   edges: Int32Array,
   edgeCount: number,
   perf?: PerfContext,
 ): string {
-  if (perf) perf.marks["start"] = performance.now();
-  edgeCount = removeBidirectionalEdges(edges, edgeCount);
-  if (perf) perf.marks["removeEdges"] = performance.now();
-  const polygons = buildPolygons(edges, edgeCount);
-  if (perf) perf.marks["buildPolygons"] = performance.now();
-  concatPolygons(polygons);
-  if (perf) perf.marks["concatPolygons"] = performance.now();
-  const d = generateSVGPathData(polygons);
-  if (perf) {
-    perf.marks["generateSVG"] = performance.now();
-    perf.polygonCount = polygons.length;
+  if (edgeCount <= 0) return `<path stroke="none" fill="${hex}" d=""/>`;
+
+  const edgeBytes = edgeCount * 4 * 4;
+  /* Worst case: each edge becomes a separate polygon with 5 points (closed
+     rectangle), requiring 1 (count) + 5*2 (coords) = 11 int32s per edge.
+     concat_polygons only shrinks the buffer (net -3 per merge). */
+  const outCapacity = edgeCount * 11;
+  const outBytes = outCapacity * 4;
+  const totalBytes = edgeBytes + outBytes;
+
+  const ptr = wasmModule._malloc(totalBytes);
+  if (!ptr) throw new Error("wasm malloc failed");
+
+  const edgesPtr = ptr;
+  const outPtr = ptr + edgeBytes;
+
+  try {
+    wasmModule.HEAP32.set(edges.subarray(0, edgeCount * 4), edgesPtr / 4);
+
+    if (perf) perf.marks["start"] = performance.now();
+    const newEdgeCount = wasmRemoveBidirectionalEdges(edgesPtr, edgeCount);
+    if (newEdgeCount < 0)
+      throw new Error("wasm remove_bidirectional_edges failed");
+    if (perf) perf.marks["removeEdges"] = performance.now();
+
+    const bufLen = wasmBuildPolygons(
+      edgesPtr,
+      newEdgeCount,
+      outPtr,
+      outCapacity,
+    );
+    if (bufLen < 0) throw new Error("wasm build_polygons failed");
+    if (perf) perf.marks["buildPolygons"] = performance.now();
+
+    /* Read flat buffer and convert to JS polygon arrays */
+    const flatBuf = new Int32Array(bufLen);
+    flatBuf.set(wasmModule.HEAP32.subarray(outPtr / 4, outPtr / 4 + bufLen));
+    const polygons = parseFlatPolygons(flatBuf, bufLen);
+
+    /* concat and SVG generation remain in JS */
+    concatPolygons(polygons);
+    if (perf) perf.marks["concatPolygons"] = performance.now();
+
+    const d = generateSVGPathData(polygons);
+    if (perf) {
+      perf.marks["generateSVG"] = performance.now();
+      perf.polygonCount = polygons.length;
+    }
+
+    return `<path stroke="none" fill="${hex}" d="${d}"/>`;
+  } finally {
+    wasmModule._free(ptr);
   }
-  return `<path stroke="none" fill="${hex}" d="${d}"/>`;
 }
 
 export function collectPerf(

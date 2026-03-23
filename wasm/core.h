@@ -5,6 +5,7 @@
 
 #define CORE_ERROR_ALLOC (-1)
 #define CORE_ERROR_CAPACITY (-2)
+#define CORE_ERROR_BROKEN_CHAIN (-3)
 
 int32_t remove_bidirectional_edges(int32_t *edges, int32_t edge_count);
 

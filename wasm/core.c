@@ -224,11 +224,10 @@ int32_t build_polygons(const int32_t *edges, int32_t edge_count, int32_t *out,
       }
 
       if (found_edge < 0) {
-        /* Should not happen with valid input */
         free(adj);
         free(next_same_start);
         free(used);
-        return CORE_ERROR_ALLOC;
+        return CORE_ERROR_BROKEN_CHAIN;
       }
 
       used[found_edge] = 1;
@@ -323,7 +322,7 @@ int32_t concat_polygons(int32_t *buf, int32_t buf_len) {
     if (i_off < 0)
       break;
     int32_t i_pc = buf[i_off];
-    int32_t i_pts = i_off + 1; /* start of points for polygon i */
+    int32_t i_pts = i_off + 1;
 
     for (int32_t j = 0; j < i_pc; j++) {
       int32_t jx = buf[i_pts + j * 2];
@@ -335,82 +334,59 @@ int32_t concat_polygons(int32_t *buf, int32_t buf_len) {
           break;
         int32_t k_pc = buf[k_off];
         int32_t k_pts = k_off + 1;
-        int32_t k_size = 1 + k_pc * 2; /* total elements for polygon k */
+        int32_t k_size = 1 + k_pc * 2;
 
         for (int32_t l = 0; l < k_pc - 1; l++) {
-          /* Exclude end point (same as start) */
           int32_t lx = buf[k_pts + l * 2];
           int32_t ly = buf[k_pts + l * 2 + 1];
 
           if (jx != lx || jy != ly)
             continue;
 
-          /* Match found: embed polygon k into polygon i at position j.
-             Insert points from k into i, then remove polygon k. */
-          int32_t insert_count = 0;
-          /* Points to insert from polygon k:
-             If l > 0: k[1..l] then k[l+1..end]
-             If l == 0: k[1..end] */
+          /* Save polygon k's points to a temp buffer before modifying buf */
+          int32_t *k_copy =
+              (int32_t *)malloc((size_t)k_size * sizeof(int32_t));
+          if (!k_copy)
+            return CORE_ERROR_ALLOC;
+          memcpy(k_copy, buf + k_off, (size_t)k_size * sizeof(int32_t));
 
-          /* Calculate total points to insert */
-          if (l > 0) {
-            insert_count = k_pc - 1; /* all points except start (==end) */
-          } else {
-            insert_count = k_pc - 1;
-          }
+          /* Remove polygon k from buf first */
+          int32_t after_k = k_off + k_size;
+          memmove(buf + k_off, buf + after_k,
+                  (size_t)(buf_len - after_k) * sizeof(int32_t));
+          buf_len -= k_size;
+          num_polys--;
+
+          /* Now insert points from k_copy into polygon i.
+             i_off is unchanged (k was after i). */
+          int32_t insert_count = k_pc - 1; /* skip last point (== first) */
           int32_t insert_elems = insert_count * 2;
-
-          /* Make room in polygon i: shift everything after j by
-           * insert_elems */
-          int32_t insert_pos =
-              i_pts + (j + 1) * 2; /* byte position after point j */
+          int32_t insert_pos = i_pts + (j + 1) * 2;
           int32_t tail_len = buf_len - insert_pos;
 
-          /* Shift tail right to make room */
           memmove(buf + insert_pos + insert_elems, buf + insert_pos,
                   (size_t)tail_len * sizeof(int32_t));
           buf_len += insert_elems;
 
-          /* Copy points from polygon k */
+          /* JS splice order: first k[l+1..end-1], then k[1..l]
+             Both splice at j+1, so k[l+1..end-1] ends up after k[1..l]. */
           int32_t wp = insert_pos;
+          for (int32_t m = l + 1; m < k_pc; m++) {
+            buf[wp++] = k_copy[1 + m * 2];
+            buf[wp++] = k_copy[1 + m * 2 + 1];
+          }
           if (l > 0) {
-            /* First: k[1..l] */
             for (int32_t m = 1; m <= l; m++) {
-              /* k_off shifted by insert_elems since it's after insert_pos
-               */
-              int32_t src_off = k_off + insert_elems + 1 + m * 2;
-              buf[wp++] = buf[src_off];
-              buf[wp++] = buf[src_off + 1];
-            }
-            /* Then: k[l+1..end-1] (skip last which == first) */
-            for (int32_t m = l + 1; m < k_pc; m++) {
-              int32_t src_off = k_off + insert_elems + 1 + m * 2;
-              buf[wp++] = buf[src_off];
-              buf[wp++] = buf[src_off + 1];
-            }
-          } else {
-            /* l == 0: insert k[1..end-1] */
-            for (int32_t m = 1; m < k_pc; m++) {
-              int32_t src_off = k_off + insert_elems + 1 + m * 2;
-              buf[wp++] = buf[src_off];
-              buf[wp++] = buf[src_off + 1];
+              buf[wp++] = k_copy[1 + m * 2];
+              buf[wp++] = k_copy[1 + m * 2 + 1];
             }
           }
 
-          /* Update polygon i's point count */
-          /* i_off may have shifted if k was before i (impossible since k >
-           * i) */
+          free(k_copy);
+
           buf[i_off] = i_pc + insert_count;
           i_pc = buf[i_off];
-
-          /* Remove polygon k (which is now after the insertion) */
-          int32_t new_k_off = poly_offset(buf, buf_len, k);
-          int32_t new_k_size = 1 + buf[new_k_off] * 2;
-          int32_t after_k = new_k_off + new_k_size;
-          memmove(buf + new_k_off, buf + after_k,
-                  (size_t)(buf_len - after_k) * sizeof(int32_t));
-          buf_len -= new_k_size;
-          num_polys--;
+          i_pts = i_off + 1;
           k--;
           break;
         }

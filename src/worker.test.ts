@@ -1,11 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  removeBidirectionalEdges,
-  buildPolygons,
-  concatPolygons,
-  generateSVGPathData,
-} from "./worker.js";
+import { toSVGPath } from "./worker.js";
+import { ColorHex } from "./color-hex.js";
 
 /** Generate a flat Int32Array of 4 clockwise edges for a pixel at (x, y). */
 function pixelEdges(x: number, y: number): number[] {
@@ -36,174 +32,58 @@ function makeEdges(...pixels: number[][]): Int32Array {
   return new Int32Array(flat);
 }
 
-describe("removeBidirectionalEdges", () => {
-  test("single pixel: all 4 edges remain", () => {
+describe("toSVGPath end-to-end", () => {
+  const hex = "#ff0000ff" as ColorHex;
+
+  test("single pixel produces unit square path", () => {
     const edges = makeEdges(pixelEdges(0, 0));
-    const count = removeBidirectionalEdges(edges, 4);
-    assert.equal(count, 4);
+    const svg = toSVGPath(hex, edges, 4);
+    assert.match(svg, /d="M0,0h1v1h-1v-1z"/);
   });
 
-  test("2x1 horizontal pixels: shared vertical edge removed", () => {
+  test("2x1 horizontal produces 2x1 rectangle path", () => {
     const edges = makeEdges(pixelEdges(0, 0), pixelEdges(1, 0));
-    const count = removeBidirectionalEdges(edges, 8);
-    assert.equal(count, 6);
+    const svg = toSVGPath(hex, edges, 8);
+    assert.match(svg, /d="M0,0h2v1h-2v-1z"/);
   });
 
-  test("2x2 square: 4 internal edge pairs removed", () => {
+  test("2x2 square produces 2x2 rectangle path", () => {
     const edges = makeEdges(
       pixelEdges(0, 0),
       pixelEdges(1, 0),
       pixelEdges(0, 1),
       pixelEdges(1, 1),
     );
-    const count = removeBidirectionalEdges(edges, 16);
-    assert.equal(count, 8);
-  });
-});
-
-describe("buildPolygons", () => {
-  test("single pixel: produces one rectangular polygon", () => {
-    const edges = makeEdges(pixelEdges(0, 0));
-    const polygons = buildPolygons(edges, 4);
-    assert.equal(polygons.length, 1);
-    const p = polygons[0]!;
-    assert.deepEqual(p[0], p[p.length - 1]);
+    const svg = toSVGPath(hex, edges, 16);
+    assert.match(svg, /d="M0,0h2v2h-2v-2z"/);
   });
 
-  test("2x1 horizontal: collinear edges merged", () => {
-    const edges = makeEdges(pixelEdges(0, 0), pixelEdges(1, 0));
-    const count = removeBidirectionalEdges(edges, 8);
-    const polygons = buildPolygons(edges, count);
-    assert.equal(polygons.length, 1);
-    const p = polygons[0]!;
-    assert.equal(p.length, 5);
-  });
-
-  test("2x2 square: 4 corners + closing point", () => {
-    const edges = makeEdges(
-      pixelEdges(0, 0),
-      pixelEdges(1, 0),
-      pixelEdges(0, 1),
-      pixelEdges(1, 1),
-    );
-    const count = removeBidirectionalEdges(edges, 16);
-    const polygons = buildPolygons(edges, count);
-    assert.equal(polygons.length, 1);
-    const p = polygons[0]!;
-    assert.equal(p.length, 5);
-  });
-
-  test("L-shape: produces correct polygon", () => {
+  test("L-shape produces 6-segment path", () => {
     const edges = makeEdges(
       pixelEdges(0, 0),
       pixelEdges(1, 0),
       pixelEdges(0, 1),
     );
-    const count = removeBidirectionalEdges(edges, 12);
-    const polygons = buildPolygons(edges, count);
-    assert.equal(polygons.length, 1);
-    const p = polygons[0]!;
-    assert.equal(p.length, 7);
+    const svg = toSVGPath(hex, edges, 12);
+    // L-shape has 7 points = 6 segments + z
+    const d = svg.match(/d="([^"]+)"/)?.[1] ?? "";
+    const segments = d.match(/[Mhvz]/g) ?? [];
+    // M + 6 segments + z = 8 total
+    assert.equal(segments.length, 8);
   });
 
-  test("two separate pixels: produces two polygons", () => {
-    const edges = makeEdges(pixelEdges(0, 0), pixelEdges(2, 0));
-    const polygons = buildPolygons(edges, 8);
-    assert.equal(polygons.length, 2);
-  });
-});
-
-describe("concatPolygons", () => {
-  test("two touching polygons merged into one", () => {
-    const polygons: [number, number][][] = [
-      [
-        [0, 0],
-        [1, 0],
-        [1, 1],
-        [0, 1],
-        [0, 0],
-      ],
-      [
-        [1, 0],
-        [2, 0],
-        [2, 1],
-        [1, 1],
-        [1, 0],
-      ],
-    ];
-    concatPolygons(polygons);
-    assert.equal(polygons.length, 1);
+  test("two disjoint pixels produce two separate paths", () => {
+    const edges = makeEdges(pixelEdges(0, 0), pixelEdges(3, 3));
+    const svg = toSVGPath(hex, edges, 8);
+    const d = svg.match(/d="([^"]+)"/)?.[1] ?? "";
+    // Two polygons touching at diagonal => 2 separate M commands
+    const mCount = (d.match(/M/g) ?? []).length;
+    assert.equal(mCount, 2);
   });
 
-  test("non-touching polygons remain separate", () => {
-    const polygons: [number, number][][] = [
-      [
-        [0, 0],
-        [1, 0],
-        [1, 1],
-        [0, 1],
-        [0, 0],
-      ],
-      [
-        [3, 3],
-        [4, 3],
-        [4, 4],
-        [3, 4],
-        [3, 3],
-      ],
-    ];
-    concatPolygons(polygons);
-    assert.equal(polygons.length, 2);
-  });
-});
-
-describe("generateSVGPathData", () => {
-  test("single 1x1 square", () => {
-    const polygons: [number, number][][] = [
-      [
-        [0, 0],
-        [1, 0],
-        [1, 1],
-        [0, 1],
-        [0, 0],
-      ],
-    ];
-    const d = generateSVGPathData(polygons);
-    assert.equal(d, "M0,0h1v1h-1v-1z");
-  });
-
-  test("2x1 rectangle", () => {
-    const polygons: [number, number][][] = [
-      [
-        [0, 0],
-        [2, 0],
-        [2, 1],
-        [0, 1],
-        [0, 0],
-      ],
-    ];
-    const d = generateSVGPathData(polygons);
-    assert.equal(d, "M0,0h2v1h-2v-1z");
-  });
-
-  test("multiple polygons concatenated", () => {
-    const polygons: [number, number][][] = [
-      [
-        [0, 0],
-        [1, 0],
-        [1, 1],
-        [0, 1],
-        [0, 0],
-      ],
-      [
-        [2, 2],
-        [3, 2],
-        [3, 3],
-        [2, 3],
-        [2, 2],
-      ],
-    ];
-    const d = generateSVGPathData(polygons);
-    assert.equal(d, "M0,0h1v1h-1v-1zM2,2h1v1h-1v-1z");
+  test("zero edges produces empty path", () => {
+    const edges = new Int32Array(0);
+    const svg = toSVGPath(hex, edges, 0);
+    assert.match(svg, /d=""/);
   });
 });
