@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define POINT_KEY(x, y) (((uint64_t)(uint16_t)(x) << 16) | (uint16_t)(y))
+
 typedef struct {
   uint64_t key;
   int32_t value;
@@ -118,4 +120,173 @@ int32_t remove_bidirectional_edges(int32_t *edges, int32_t edge_count) {
   free(table);
   free(to_remove);
   return write_index;
+}
+
+int32_t build_polygons(const int32_t *edges, int32_t edge_count, int32_t *out,
+                       int32_t out_capacity) {
+  if (edge_count <= 0) {
+    return 0;
+  }
+
+  /* Adjacency: hash table maps start-point to head of linked list.
+     next_same_start[i] links edges sharing the same start point. */
+  int32_t adj_capacity = edge_count * 2;
+  HashEntry *adj = (HashEntry *)calloc((size_t)adj_capacity, sizeof(HashEntry));
+  int32_t *next_same_start =
+      (int32_t *)malloc((size_t)edge_count * sizeof(int32_t));
+  uint8_t *used = (uint8_t *)calloc((size_t)edge_count, 1);
+  if (!adj || !next_same_start || !used) {
+    free(adj);
+    free(next_same_start);
+    free(used);
+    return CORE_ERROR_ALLOC;
+  }
+  memset(next_same_start, -1, (size_t)edge_count * sizeof(int32_t));
+
+  for (int32_t i = 0; i < edge_count; i++) {
+    int32_t off = i * 4;
+    uint64_t key = POINT_KEY(edges[off], edges[off + 1]);
+    int32_t found = hash_find(adj, adj_capacity, key);
+    if (found >= 0) {
+      /* Prepend to existing linked list */
+      next_same_start[i] = adj[found].value;
+      adj[found].value = i;
+    } else {
+      hash_insert(adj, adj_capacity, key, i);
+    }
+  }
+
+  int32_t remaining = edge_count;
+  int32_t start_scan = 0;
+  int32_t out_pos = 0;
+
+  while (remaining > 0) {
+    while (used[start_scan])
+      start_scan++;
+
+    /* Reserve space for point_count (filled later) */
+    int32_t count_pos = out_pos++;
+    if (out_pos >= out_capacity) {
+      free(adj);
+      free(next_same_start);
+      free(used);
+      return CORE_ERROR_CAPACITY;
+    }
+
+    int32_t point_count = 0;
+    used[start_scan] = 1;
+    remaining--;
+
+    int32_t off = start_scan * 4;
+    int32_t first_x = edges[off];
+    int32_t first_y = edges[off + 1];
+    int32_t cur_x = edges[off + 2];
+    int32_t cur_y = edges[off + 3];
+
+/* Helper: append point to output, checking capacity */
+#define EMIT_POINT(px, py)                                                     \
+  do {                                                                         \
+    if (out_pos + 2 > out_capacity) {                                          \
+      free(adj);                                                               \
+      free(next_same_start);                                                   \
+      free(used);                                                              \
+      return CORE_ERROR_CAPACITY;                                              \
+    }                                                                          \
+    out[out_pos++] = (px);                                                     \
+    out[out_pos++] = (py);                                                     \
+    point_count++;                                                             \
+  } while (0)
+
+    EMIT_POINT(first_x, first_y);
+    EMIT_POINT(cur_x, cur_y);
+
+    /* Track last two points for collinear merging */
+    int32_t prev_x = first_x, prev_y = first_y;
+    int32_t last_x = cur_x, last_y = cur_y;
+
+    do {
+      uint64_t key = POINT_KEY(cur_x, cur_y);
+      int32_t slot = hash_find(adj, adj_capacity, key);
+      int32_t found_edge = -1;
+
+      if (slot >= 0) {
+        /* Walk linked list to find an unused edge */
+        int32_t prev_link = -1;
+        int32_t idx = adj[slot].value;
+        while (idx >= 0) {
+          if (!used[idx]) {
+            found_edge = idx;
+            break;
+          }
+          prev_link = idx;
+          idx = next_same_start[idx];
+        }
+      }
+
+      if (found_edge < 0) {
+        /* Should not happen with valid input */
+        free(adj);
+        free(next_same_start);
+        free(used);
+        return CORE_ERROR_ALLOC;
+      }
+
+      used[found_edge] = 1;
+      remaining--;
+      off = found_edge * 4;
+      int32_t new_x = edges[off + 2];
+      int32_t new_y = edges[off + 3];
+
+      /* Collinear merge: extend last point instead of adding new one */
+      if (prev_x == last_x && last_x == new_x) {
+        /* Vertical continuation */
+        out[out_pos - 1] = new_y;
+        last_y = new_y;
+      } else if (prev_y == last_y && last_y == new_y) {
+        /* Horizontal continuation */
+        out[out_pos - 2] = new_x;
+        last_x = new_x;
+      } else {
+        prev_x = last_x;
+        prev_y = last_y;
+        last_x = new_x;
+        last_y = new_y;
+        EMIT_POINT(new_x, new_y);
+      }
+
+      cur_x = new_x;
+      cur_y = new_y;
+    } while (!(cur_x == first_x && cur_y == first_y));
+
+    /* Adjust start/end if they lie on the same line */
+    int32_t p0_x = out[count_pos + 1];
+    int32_t p0_y = out[count_pos + 2];
+    int32_t p1_x = out[count_pos + 3];
+    int32_t p1_y = out[count_pos + 4];
+    int32_t pn_x = out[out_pos - 4]; /* second-to-last point */
+    int32_t pn_y = out[out_pos - 3];
+    int32_t pe_x = out[out_pos - 2]; /* last point (== first) */
+    int32_t pe_y = out[out_pos - 1];
+
+    if (p0_x == p1_x && pn_x == pe_x) {
+      /* Start/end along vertical line: merge */
+      point_count--;
+      out_pos -= 2;
+      out[count_pos + 2] = pn_y; /* adjust first point's y */
+    } else if (p0_y == p1_y && pn_y == pe_y) {
+      /* Start/end along horizontal line: merge */
+      point_count--;
+      out_pos -= 2;
+      out[count_pos + 1] = pn_x; /* adjust first point's x */
+    }
+
+#undef EMIT_POINT
+
+    out[count_pos] = point_count;
+  }
+
+  free(adj);
+  free(next_same_start);
+  free(used);
+  return out_pos;
 }
