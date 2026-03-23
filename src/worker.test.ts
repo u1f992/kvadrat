@@ -162,9 +162,9 @@ describe("toRectangles end-to-end", () => {
     const results = await toRectangles(img as any);
     const red = results.find((r) => r.color === "#ff0000ff")!;
     assert.equal(red.rects.length, 2);
-    // Top row: 2x1, then left column remainder: 1x1
-    assert.deepEqual(red.rects[0], { x: 0, y: 0, w: 2, h: 1 });
-    assert.deepEqual(red.rects[1], { x: 0, y: 1, w: 1, h: 1 });
+    const sorted = [...red.rects].sort((a, b) => a.y - b.y || a.x - b.x);
+    assert.deepEqual(sorted[0], { x: 0, y: 0, w: 2, h: 1 });
+    assert.deepEqual(sorted[1], { x: 0, y: 1, w: 1, h: 1 });
   });
 
   test("3x3 checkerboard produces individual 1x1 rectangles", async () => {
@@ -202,5 +202,90 @@ describe("toRectangles end-to-end", () => {
     const results = await toRectangles(img as any);
     assert.equal(results.length, 1);
     assert.deepEqual(results[0]!.rects, [{ x: 0, y: 0, w: 1, h: 2 }]);
+  });
+});
+
+function rectCoverage(
+  results: { rects: { x: number; y: number; w: number; h: number }[] }[],
+): number {
+  let area = 0;
+  for (const { rects } of results) for (const r of rects) area += r.w * r.h;
+  return area;
+}
+
+describe("toRectangles coverage", () => {
+  const R = [255, 0, 0, 255];
+  const O = [0, 0, 0, 0];
+
+  test("cross shape: exact pixel coverage", async () => {
+    // .#.
+    // ###
+    // .#.
+    const img = makeImage(3, 3, [O, R, O, R, R, R, O, R, O]);
+    const svg = await toSVG(img as any);
+    const paths = svg.match(/d="([^"]+)"/g) ?? [];
+    // Log polygon paths for debugging
+    const results = await toRectangles(img as any);
+    for (const { color, rects } of results) {
+      let area = 0;
+      for (const r of rects) area += r.w * r.h;
+      const label = `${color} area=${area} rects=${JSON.stringify(rects)} paths=${JSON.stringify(paths)}`;
+      if (color === "#ff0000ff") assert.equal(area, 5, label);
+      else if (color === "#00000000") assert.equal(area, 4, label);
+    }
+  });
+
+  test("T-shape: exact pixel coverage", async () => {
+    // ###
+    // .#.
+    // .#.
+    const img = makeImage(3, 3, [R, R, R, O, R, O, O, R, O]);
+    const results = await toRectangles(img as any);
+    assert.equal(rectCoverage(results), 9);
+    const red = results.find((r) => r.color === "#ff0000ff")!;
+    let redArea = 0;
+    for (const r of red.rects) redArea += r.w * r.h;
+    assert.equal(redArea, 5);
+  });
+
+  test("ring shape: exact pixel coverage", async () => {
+    // ###
+    // #.#
+    // ###
+    const img = makeImage(3, 3, [R, R, R, R, O, R, R, R, R]);
+    const results = await toRectangles(img as any);
+    for (const { color, rects } of results) {
+      let area = 0;
+      for (const r of rects) area += r.w * r.h;
+      const label = `${color} area=${area} rects=${JSON.stringify(rects)}`;
+      if (color === "#ff0000ff") assert.equal(area, 8, label);
+      else if (color === "#00000000") assert.equal(area, 1, label);
+    }
+  });
+
+  test("U-shape: exact pixel coverage", async () => {
+    // #.#
+    // #.#
+    // ###
+    const img = makeImage(3, 3, [R, O, R, R, O, R, R, R, R]);
+    const results = await toRectangles(img as any);
+    assert.equal(rectCoverage(results), 9);
+    const red = results.find((r) => r.color === "#ff0000ff")!;
+    let redArea = 0;
+    for (const r of red.rects) redArea += r.w * r.h;
+    assert.equal(redArea, 7);
+  });
+
+  test("step shape: exact pixel coverage", async () => {
+    // ###
+    // .##
+    // ..#
+    const img = makeImage(3, 3, [R, R, R, O, R, R, O, O, R]);
+    const results = await toRectangles(img as any);
+    assert.equal(rectCoverage(results), 9);
+    const red = results.find((r) => r.color === "#ff0000ff")!;
+    let redArea = 0;
+    for (const r of red.rects) redArea += r.w * r.h;
+    assert.equal(redArea, 6);
   });
 });

@@ -446,70 +446,167 @@ static inline uint32_t rgba_key(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
   return ((uint32_t)r << 24) | ((uint32_t)g << 16) | ((uint32_t)b << 8) | a;
 }
 
-/* Build rectangles from pixel coordinates using greedy row-run + vertical
-   extension. coords: flat [x0, y0, x1, y1, ...] pairs, count entries.
-   Output format: [x, y, w, h, ...]. Returns total int32 elements written,
-   or negative on error. */
-int32_t build_rectangles(const int32_t *coords, int32_t count, int32_t width,
-                         int32_t height, int32_t *out, int32_t out_capacity) {
-  if (count <= 0)
+static int cmp_int32(const void *a, const void *b) {
+  int32_t va = *(const int32_t *)a;
+  int32_t vb = *(const int32_t *)b;
+  return (va > vb) - (va < vb);
+}
+
+/* Decompose rectilinear polygons into rectangles.
+   Uses polygon vertex y-coordinates to define horizontal strips, then
+   XOR-pairs vertical edge x-coordinates within each strip. Handles holes
+   and self-touching polygons correctly via XOR pairing. Post-pass merges
+   vertically adjacent rectangles with same (x, w).
+   Input: polygon flat buffer [point_count, x0,y0, x1,y1, ...]
+   Output: rectangle flat buffer [x, y, w, h, ...]
+   Returns: total int32 elements written, or negative on error. */
+int32_t rect_decompose(const int32_t *polys, int32_t polys_len, int32_t *out,
+                       int32_t out_capacity) {
+  if (polys_len <= 0)
     return 0;
 
-  uint8_t *grid = (uint8_t *)calloc((size_t)width * height, 1);
-  if (!grid)
-    return CORE_ERROR_ALLOC;
-
-  for (int32_t i = 0; i < count; i++) {
-    int32_t x = coords[i * 2];
-    int32_t y = coords[i * 2 + 1];
-    grid[y * width + x] = 1;
-  }
-
-  int32_t out_pos = 0;
-
-  for (int32_t y = 0; y < height; y++) {
-    for (int32_t x = 0; x < width; x++) {
-      if (!grid[y * width + x])
-        continue;
-
-      /* Find horizontal run length */
-      int32_t w = 1;
-      while (x + w < width && grid[y * width + x + w])
-        w++;
-
-      /* Extend vertically */
-      int32_t h = 1;
-      while (y + h < height) {
-        int32_t ok = 1;
-        for (int32_t dx = 0; dx < w; dx++) {
-          if (!grid[(y + h) * width + x + dx]) {
-            ok = 0;
-            break;
-          }
-        }
-        if (!ok)
-          break;
-        h++;
-      }
-
-      /* Clear the rectangle in grid */
-      for (int32_t dy = 0; dy < h; dy++) {
-        memset(&grid[(y + dy) * width + x], 0, (size_t)w);
-      }
-
-      /* Emit rectangle */
-      if (out_pos + 4 > out_capacity) {
-        free(grid);
-        return CORE_ERROR_CAPACITY;
-      }
-      out[out_pos++] = x;
-      out[out_pos++] = y;
-      out[out_pos++] = w;
-      out[out_pos++] = h;
+  int32_t total_verts = 0;
+  {
+    int32_t p = 0;
+    while (p < polys_len) {
+      total_verts += polys[p];
+      p += 1 + polys[p] * 2;
     }
   }
 
-  free(grid);
+  int32_t *vedge_x = (int32_t *)malloc((size_t)total_verts * sizeof(int32_t));
+  int32_t *vedge_ymin =
+      (int32_t *)malloc((size_t)total_verts * sizeof(int32_t));
+  int32_t *vedge_ymax =
+      (int32_t *)malloc((size_t)total_verts * sizeof(int32_t));
+  int32_t *ys = (int32_t *)malloc((size_t)total_verts * sizeof(int32_t));
+  int32_t *strip_xs =
+      (int32_t *)malloc((size_t)total_verts * sizeof(int32_t));
+  if (!vedge_x || !vedge_ymin || !vedge_ymax || !ys || !strip_xs) {
+    free(vedge_x);
+    free(vedge_ymin);
+    free(vedge_ymax);
+    free(ys);
+    free(strip_xs);
+    return CORE_ERROR_ALLOC;
+  }
+
+  int32_t num_vedges = 0, num_ys = 0;
+  {
+    int32_t p = 0;
+    while (p < polys_len) {
+      int32_t pc = polys[p];
+      const int32_t *pts = &polys[p + 1];
+      /* Remove duplicate closing vertex for edge iteration */
+      int32_t epc = pc;
+      if (epc >= 2 && pts[(epc - 1) * 2] == pts[0] &&
+          pts[(epc - 1) * 2 + 1] == pts[1])
+        epc--;
+      p += 1 + pc * 2;
+
+      for (int32_t i = 0; i < epc; i++) {
+        int32_t x1 = pts[i * 2], y1 = pts[i * 2 + 1];
+        int32_t x2 = pts[((i + 1) % epc) * 2];
+        int32_t y2 = pts[((i + 1) % epc) * 2 + 1];
+        ys[num_ys++] = y1;
+        if (x1 == x2) {
+          vedge_x[num_vedges] = x1;
+          vedge_ymin[num_vedges] = y1 < y2 ? y1 : y2;
+          vedge_ymax[num_vedges] = y1 > y2 ? y1 : y2;
+          num_vedges++;
+        }
+      }
+    }
+  }
+
+  qsort(ys, (size_t)num_ys, sizeof(int32_t), cmp_int32);
+  int32_t unique_ys = 0;
+  for (int32_t i = 0; i < num_ys; i++) {
+    if (unique_ys == 0 || ys[i] != ys[unique_ys - 1])
+      ys[unique_ys++] = ys[i];
+  }
+
+  int32_t out_pos = 0;
+  for (int32_t s = 0; s + 1 < unique_ys; s++) {
+    int32_t y_top = ys[s];
+    int32_t y_bot = ys[s + 1];
+    int32_t strip_h = y_bot - y_top;
+    if (strip_h <= 0)
+      continue;
+
+    int32_t num_xs = 0;
+    for (int32_t e = 0; e < num_vedges; e++) {
+      if (vedge_ymin[e] <= y_top && vedge_ymax[e] >= y_bot)
+        strip_xs[num_xs++] = vedge_x[e];
+    }
+
+    qsort(strip_xs, (size_t)num_xs, sizeof(int32_t), cmp_int32);
+
+    for (int32_t i = 0; i + 1 < num_xs; i += 2) {
+      int32_t rw = strip_xs[i + 1] - strip_xs[i];
+      if (rw <= 0)
+        continue;
+      if (out_pos + 4 > out_capacity) {
+        free(vedge_x);
+        free(vedge_ymin);
+        free(vedge_ymax);
+        free(ys);
+        free(strip_xs);
+        return CORE_ERROR_CAPACITY;
+      }
+      out[out_pos++] = strip_xs[i];
+      out[out_pos++] = y_top;
+      out[out_pos++] = rw;
+      out[out_pos++] = strip_h;
+    }
+  }
+
+  free(vedge_x);
+  free(vedge_ymin);
+  free(vedge_ymax);
+  free(ys);
+  free(strip_xs);
+
+  /* Vertical merge pass */
+  {
+    int32_t num_rects = out_pos / 4;
+    uint8_t *merged = (uint8_t *)calloc((size_t)num_rects, 1);
+    if (!merged)
+      return CORE_ERROR_ALLOC;
+
+    int32_t write = 0;
+    for (int32_t i = 0; i < num_rects; i++) {
+      if (merged[i])
+        continue;
+      int32_t rx = out[i * 4], ry = out[i * 4 + 1];
+      int32_t rw = out[i * 4 + 2], rh = out[i * 4 + 3];
+
+      int32_t extended = 1;
+      while (extended) {
+        extended = 0;
+        for (int32_t j = i + 1; j < num_rects; j++) {
+          if (merged[j])
+            continue;
+          if (out[j * 4] == rx && out[j * 4 + 2] == rw &&
+              out[j * 4 + 1] == ry + rh) {
+            rh += out[j * 4 + 3];
+            merged[j] = 1;
+            extended = 1;
+            break;
+          }
+        }
+      }
+
+      out[write++] = rx;
+      out[write++] = ry;
+      out[write++] = rw;
+      out[write++] = rh;
+    }
+
+    free(merged);
+    out_pos = write;
+  }
+
   return out_pos;
 }
 
@@ -518,8 +615,6 @@ typedef struct {
   int32_t c_start;
   int32_t c_end;
   CoreMode mode;
-  int32_t width;
-  int32_t height;
   int32_t **bufs;
   int32_t *buf_offsets;
   ColorResult *out_results;
@@ -532,62 +627,54 @@ static void *pipeline_worker(void *arg) {
   task->error = 0;
 
   for (int32_t c = task->c_start; c < task->c_end; c++) {
+    int32_t edge_count = task->buf_offsets[c] / 4;
+    int32_t *edges = task->bufs[c];
+
+    int32_t new_ec = remove_bidirectional_edges(edges, edge_count);
+    if (new_ec < 0) {
+      task->error = new_ec;
+      return NULL;
+    }
+
+    int32_t out_cap = new_ec * 11;
+    int32_t *poly_buf = (int32_t *)malloc((size_t)out_cap * sizeof(int32_t));
+    if (!poly_buf) {
+      task->error = CORE_ERROR_ALLOC;
+      return NULL;
+    }
+
+    int32_t buf_len = build_polygons(edges, new_ec, poly_buf, out_cap);
+    free(edges);
+    task->bufs[c] = NULL;
+
+    if (buf_len < 0) {
+      free(poly_buf);
+      task->error = buf_len;
+      return NULL;
+    }
+
     if (task->mode == CORE_MODE_RECTANGLE) {
-      int32_t coord_count = task->buf_offsets[c] / 2;
-      int64_t out_cap_64 = (int64_t)coord_count * 4;
-      if (out_cap_64 > INT32_MAX) {
-        task->error = CORE_ERROR_CAPACITY;
-        return NULL;
-      }
-      int32_t out_cap = (int32_t)out_cap_64;
+      /* Decompose polygons into rectangles */
       int32_t *rect_buf = (int32_t *)malloc((size_t)out_cap * sizeof(int32_t));
       if (!rect_buf) {
+        free(poly_buf);
         task->error = CORE_ERROR_ALLOC;
         return NULL;
       }
 
-      int32_t result =
-          build_rectangles(task->bufs[c], coord_count, task->width,
-                           task->height, rect_buf, out_cap);
-      free(task->bufs[c]);
-      task->bufs[c] = NULL;
+      int32_t rect_len = rect_decompose(poly_buf, buf_len, rect_buf, out_cap);
+      free(poly_buf);
 
-      if (result < 0) {
+      if (rect_len < 0) {
         free(rect_buf);
-        task->error = result;
+        task->error = rect_len;
         return NULL;
       }
 
       task->out_results[c].rgba = task->color_list[c];
       task->out_results[c].polygons = rect_buf;
-      task->out_results[c].polygons_len = result;
+      task->out_results[c].polygons_len = rect_len;
     } else {
-      int32_t edge_count = task->buf_offsets[c] / 4;
-      int32_t *edges = task->bufs[c];
-
-      int32_t new_ec = remove_bidirectional_edges(edges, edge_count);
-      if (new_ec < 0) {
-        task->error = new_ec;
-        return NULL;
-      }
-
-      int32_t out_cap = new_ec * 11;
-      int32_t *poly_buf = (int32_t *)malloc((size_t)out_cap * sizeof(int32_t));
-      if (!poly_buf) {
-        task->error = CORE_ERROR_ALLOC;
-        return NULL;
-      }
-
-      int32_t buf_len = build_polygons(edges, new_ec, poly_buf, out_cap);
-      free(edges);
-      task->bufs[c] = NULL;
-
-      if (buf_len < 0) {
-        free(poly_buf);
-        task->error = buf_len;
-        return NULL;
-      }
-
       int32_t final_len = concat_polygons(poly_buf, buf_len, out_cap);
       if (final_len < 0) {
         free(poly_buf);
@@ -687,9 +774,8 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
     return CORE_ERROR_ALLOC;
   }
 
-  /* ints per pixel: polygon mode = 16 (4 edges × 4 ints), rectangle mode = 2
-   * (x, y) */
-  int32_t ints_per_pixel = (mode == CORE_MODE_RECTANGLE) ? 2 : 16;
+  /* Both modes use edges: 4 edges × 4 ints = 16 ints per pixel */
+  int32_t ints_per_pixel = 16;
 
   for (int32_t c = 0; c < num_colors; c++) {
     uint64_t key = (uint64_t)color_list[c];
@@ -721,27 +807,22 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
       int32_t *buf = bufs[c];
       int32_t off = buf_offsets[c];
 
-      if (mode == CORE_MODE_RECTANGLE) {
-        buf[off++] = x;
-        buf[off++] = y;
-      } else {
-        buf[off++] = x;
-        buf[off++] = y;
-        buf[off++] = x + 1;
-        buf[off++] = y;
-        buf[off++] = x + 1;
-        buf[off++] = y;
-        buf[off++] = x + 1;
-        buf[off++] = y + 1;
-        buf[off++] = x + 1;
-        buf[off++] = y + 1;
-        buf[off++] = x;
-        buf[off++] = y + 1;
-        buf[off++] = x;
-        buf[off++] = y + 1;
-        buf[off++] = x;
-        buf[off++] = y;
-      }
+      buf[off++] = x;
+      buf[off++] = y;
+      buf[off++] = x + 1;
+      buf[off++] = y;
+      buf[off++] = x + 1;
+      buf[off++] = y;
+      buf[off++] = x + 1;
+      buf[off++] = y + 1;
+      buf[off++] = x + 1;
+      buf[off++] = y + 1;
+      buf[off++] = x;
+      buf[off++] = y + 1;
+      buf[off++] = x;
+      buf[off++] = y + 1;
+      buf[off++] = x;
+      buf[off++] = y;
 
       buf_offsets[c] = off;
     }
@@ -783,8 +864,6 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
       tasks[t].c_start = c_start;
       tasks[t].c_end = c_start + count;
       tasks[t].mode = mode;
-      tasks[t].width = width;
-      tasks[t].height = height;
       tasks[t].bufs = bufs;
       tasks[t].buf_offsets = buf_offsets;
       tasks[t].out_results = out_results;
