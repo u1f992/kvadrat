@@ -1,4 +1,8 @@
 #include "core.h"
+#ifdef __EMSCRIPTEN__
+#include <emscripten/threading.h>
+#endif
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -433,6 +437,62 @@ static uint32_t rgba_key(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
   return ((uint32_t)r << 24) | ((uint32_t)g << 16) | ((uint32_t)b << 8) | a;
 }
 
+/* Per-color pipeline worker for pthread parallelization. */
+typedef struct {
+  int32_t c_start;
+  int32_t c_end;
+  int32_t **edge_bufs;
+  int32_t *edge_offsets;
+  ColorResult *out_results;
+  uint32_t *color_list;
+  int32_t error;
+} PipelineTask;
+
+static void *pipeline_worker(void *arg) {
+  PipelineTask *task = (PipelineTask *)arg;
+  task->error = 0;
+
+  for (int32_t c = task->c_start; c < task->c_end; c++) {
+    int32_t edge_count = task->edge_offsets[c] / 4;
+    int32_t *edges = task->edge_bufs[c];
+
+    int32_t new_ec = remove_bidirectional_edges(edges, edge_count);
+    if (new_ec < 0) {
+      task->error = new_ec;
+      return NULL;
+    }
+
+    int32_t out_cap = new_ec * 11;
+    int32_t *poly_buf = (int32_t *)malloc((size_t)out_cap * sizeof(int32_t));
+    if (!poly_buf) {
+      task->error = CORE_ERROR_ALLOC;
+      return NULL;
+    }
+
+    int32_t buf_len = build_polygons(edges, new_ec, poly_buf, out_cap);
+    free(edges);
+    task->edge_bufs[c] = NULL;
+
+    if (buf_len < 0) {
+      free(poly_buf);
+      task->error = buf_len;
+      return NULL;
+    }
+
+    int32_t final_len = concat_polygons(poly_buf, buf_len, out_cap);
+    if (final_len < 0) {
+      free(poly_buf);
+      task->error = final_len;
+      return NULL;
+    }
+
+    task->out_results[c].rgba = task->color_list[c];
+    task->out_results[c].polygons = poly_buf;
+    task->out_results[c].polygons_len = final_len;
+  }
+  return NULL;
+}
+
 /* Cleanup helper for process_image error paths. */
 static inline void pipeline_error_cleanup(int32_t **edge_bufs,
                                           int32_t first_edge,
@@ -568,48 +628,68 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
   free(color_table);
   free(idx_table);
 
-  /* Process each color through the pipeline */
-  for (int32_t c = 0; c < num_colors; c++) {
-    int32_t edge_count = edge_offsets[c] / 4;
-    int32_t *edges = edge_bufs[c];
+  /* Process each color through the pipeline (parallel) */
+  {
+    int32_t num_threads = 4; /* default, will be overridden by actual core count
+                                via Emscripten pthread pool */
+#ifdef __EMSCRIPTEN__
+    num_threads = emscripten_num_logical_cores();
+#endif
+    if (num_threads > num_colors)
+      num_threads = num_colors;
+    if (num_threads < 1)
+      num_threads = 1;
 
-    int32_t new_ec = remove_bidirectional_edges(edges, edge_count);
-    if (new_ec < 0) {
-      pipeline_error_cleanup(edge_bufs, c, num_colors, out_results, c,
-                             edge_offsets, color_list);
-      return new_ec;
-    }
-
-    int32_t out_cap = new_ec * 11;
-    int32_t *poly_buf = (int32_t *)malloc((size_t)out_cap * sizeof(int32_t));
-    if (!poly_buf) {
-      pipeline_error_cleanup(edge_bufs, c, num_colors, out_results, c,
+    PipelineTask *tasks =
+        (PipelineTask *)malloc((size_t)num_threads * sizeof(PipelineTask));
+    pthread_t *threads =
+        (pthread_t *)malloc((size_t)num_threads * sizeof(pthread_t));
+    if (!tasks || !threads) {
+      free(tasks);
+      free(threads);
+      pipeline_error_cleanup(edge_bufs, 0, num_colors, out_results, 0,
                              edge_offsets, color_list);
       return CORE_ERROR_ALLOC;
     }
 
-    int32_t buf_len = build_polygons(edges, new_ec, poly_buf, out_cap);
-    free(edges);
-    edge_bufs[c] = NULL;
+    int32_t colors_per_thread = num_colors / num_threads;
+    int32_t remainder = num_colors % num_threads;
+    int32_t c_start = 0;
 
-    if (buf_len < 0) {
-      free(poly_buf);
-      pipeline_error_cleanup(edge_bufs, c + 1, num_colors, out_results, c,
-                             edge_offsets, color_list);
-      return buf_len;
+    for (int32_t t = 0; t < num_threads; t++) {
+      int32_t count = colors_per_thread + (t < remainder ? 1 : 0);
+      tasks[t].c_start = c_start;
+      tasks[t].c_end = c_start + count;
+      tasks[t].edge_bufs = edge_bufs;
+      tasks[t].edge_offsets = edge_offsets;
+      tasks[t].out_results = out_results;
+      tasks[t].color_list = color_list;
+      tasks[t].error = 0;
+      pthread_create(&threads[t], NULL, pipeline_worker, &tasks[t]);
+      c_start += count;
     }
 
-    int32_t final_len = concat_polygons(poly_buf, buf_len, out_cap);
-    if (final_len < 0) {
-      free(poly_buf);
-      pipeline_error_cleanup(edge_bufs, c + 1, num_colors, out_results, c,
-                             edge_offsets, color_list);
-      return final_len;
+    int32_t first_error = 0;
+    for (int32_t t = 0; t < num_threads; t++) {
+      pthread_join(threads[t], NULL);
+      if (tasks[t].error != 0 && first_error == 0)
+        first_error = tasks[t].error;
     }
 
-    out_results[c].rgba = color_list[c];
-    out_results[c].polygons = poly_buf;
-    out_results[c].polygons_len = final_len;
+    free(tasks);
+    free(threads);
+
+    if (first_error != 0) {
+      /* Clean up all results — some threads may have succeeded */
+      for (int32_t c = 0; c < num_colors; c++) {
+        free(edge_bufs[c]);
+        free(out_results[c].polygons);
+      }
+      free(edge_bufs);
+      free(edge_offsets);
+      free(color_list);
+      return first_error;
+    }
   }
 
   free(edge_bufs);
