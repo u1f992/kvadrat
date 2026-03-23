@@ -446,12 +446,82 @@ static inline uint32_t rgba_key(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
   return ((uint32_t)r << 24) | ((uint32_t)g << 16) | ((uint32_t)b << 8) | a;
 }
 
+/* Build rectangles from pixel coordinates using greedy row-run + vertical
+   extension. coords: flat [x0, y0, x1, y1, ...] pairs, count entries.
+   Output format: [x, y, w, h, ...]. Returns total int32 elements written,
+   or negative on error. */
+int32_t build_rectangles(const int32_t *coords, int32_t count, int32_t width,
+                         int32_t height, int32_t *out, int32_t out_capacity) {
+  if (count <= 0)
+    return 0;
+
+  uint8_t *grid = (uint8_t *)calloc((size_t)width * height, 1);
+  if (!grid)
+    return CORE_ERROR_ALLOC;
+
+  for (int32_t i = 0; i < count; i++) {
+    int32_t x = coords[i * 2];
+    int32_t y = coords[i * 2 + 1];
+    grid[y * width + x] = 1;
+  }
+
+  int32_t out_pos = 0;
+
+  for (int32_t y = 0; y < height; y++) {
+    for (int32_t x = 0; x < width; x++) {
+      if (!grid[y * width + x])
+        continue;
+
+      /* Find horizontal run length */
+      int32_t w = 1;
+      while (x + w < width && grid[y * width + x + w])
+        w++;
+
+      /* Extend vertically */
+      int32_t h = 1;
+      while (y + h < height) {
+        int32_t ok = 1;
+        for (int32_t dx = 0; dx < w; dx++) {
+          if (!grid[(y + h) * width + x + dx]) {
+            ok = 0;
+            break;
+          }
+        }
+        if (!ok)
+          break;
+        h++;
+      }
+
+      /* Clear the rectangle in grid */
+      for (int32_t dy = 0; dy < h; dy++) {
+        memset(&grid[(y + dy) * width + x], 0, (size_t)w);
+      }
+
+      /* Emit rectangle */
+      if (out_pos + 4 > out_capacity) {
+        free(grid);
+        return CORE_ERROR_CAPACITY;
+      }
+      out[out_pos++] = x;
+      out[out_pos++] = y;
+      out[out_pos++] = w;
+      out[out_pos++] = h;
+    }
+  }
+
+  free(grid);
+  return out_pos;
+}
+
 /* Per-color pipeline worker for pthread parallelization. */
 typedef struct {
   int32_t c_start;
   int32_t c_end;
-  int32_t **edge_bufs;
-  int32_t *edge_offsets;
+  CoreMode mode;
+  int32_t width;
+  int32_t height;
+  int32_t **bufs;
+  int32_t *buf_offsets;
   ColorResult *out_results;
   uint32_t *color_list;
   int32_t error;
@@ -462,75 +532,106 @@ static void *pipeline_worker(void *arg) {
   task->error = 0;
 
   for (int32_t c = task->c_start; c < task->c_end; c++) {
-    int32_t edge_count = task->edge_offsets[c] / 4;
-    int32_t *edges = task->edge_bufs[c];
+    if (task->mode == CORE_MODE_RECTANGLE) {
+      int32_t coord_count = task->buf_offsets[c] / 2;
+      int64_t out_cap_64 = (int64_t)coord_count * 4;
+      if (out_cap_64 > INT32_MAX) {
+        task->error = CORE_ERROR_CAPACITY;
+        return NULL;
+      }
+      int32_t out_cap = (int32_t)out_cap_64;
+      int32_t *rect_buf = (int32_t *)malloc((size_t)out_cap * sizeof(int32_t));
+      if (!rect_buf) {
+        task->error = CORE_ERROR_ALLOC;
+        return NULL;
+      }
 
-    int32_t new_ec = remove_bidirectional_edges(edges, edge_count);
-    if (new_ec < 0) {
-      task->error = new_ec;
-      return NULL;
+      int32_t result =
+          build_rectangles(task->bufs[c], coord_count, task->width,
+                           task->height, rect_buf, out_cap);
+      free(task->bufs[c]);
+      task->bufs[c] = NULL;
+
+      if (result < 0) {
+        free(rect_buf);
+        task->error = result;
+        return NULL;
+      }
+
+      task->out_results[c].rgba = task->color_list[c];
+      task->out_results[c].polygons = rect_buf;
+      task->out_results[c].polygons_len = result;
+    } else {
+      int32_t edge_count = task->buf_offsets[c] / 4;
+      int32_t *edges = task->bufs[c];
+
+      int32_t new_ec = remove_bidirectional_edges(edges, edge_count);
+      if (new_ec < 0) {
+        task->error = new_ec;
+        return NULL;
+      }
+
+      int32_t out_cap = new_ec * 11;
+      int32_t *poly_buf = (int32_t *)malloc((size_t)out_cap * sizeof(int32_t));
+      if (!poly_buf) {
+        task->error = CORE_ERROR_ALLOC;
+        return NULL;
+      }
+
+      int32_t buf_len = build_polygons(edges, new_ec, poly_buf, out_cap);
+      free(edges);
+      task->bufs[c] = NULL;
+
+      if (buf_len < 0) {
+        free(poly_buf);
+        task->error = buf_len;
+        return NULL;
+      }
+
+      int32_t final_len = concat_polygons(poly_buf, buf_len, out_cap);
+      if (final_len < 0) {
+        free(poly_buf);
+        task->error = final_len;
+        return NULL;
+      }
+
+      task->out_results[c].rgba = task->color_list[c];
+      task->out_results[c].polygons = poly_buf;
+      task->out_results[c].polygons_len = final_len;
     }
-
-    int32_t out_cap = new_ec * 11;
-    int32_t *poly_buf = (int32_t *)malloc((size_t)out_cap * sizeof(int32_t));
-    if (!poly_buf) {
-      task->error = CORE_ERROR_ALLOC;
-      return NULL;
-    }
-
-    int32_t buf_len = build_polygons(edges, new_ec, poly_buf, out_cap);
-    free(edges);
-    task->edge_bufs[c] = NULL;
-
-    if (buf_len < 0) {
-      free(poly_buf);
-      task->error = buf_len;
-      return NULL;
-    }
-
-    int32_t final_len = concat_polygons(poly_buf, buf_len, out_cap);
-    if (final_len < 0) {
-      free(poly_buf);
-      task->error = final_len;
-      return NULL;
-    }
-
-    task->out_results[c].rgba = task->color_list[c];
-    task->out_results[c].polygons = poly_buf;
-    task->out_results[c].polygons_len = final_len;
   }
   return NULL;
 }
 
 /* Cleanup helper for process_image error paths. */
-static inline void
-pipeline_error_cleanup(int32_t **edge_bufs, int32_t first_edge,
-                       int32_t num_colors, ColorResult *out_results,
-                       int32_t completed_colors, int32_t *edge_offsets,
-                       uint32_t *color_list) {
-  for (int32_t j = first_edge; j < num_colors; j++)
-    free(edge_bufs[j]);
+static inline void pipeline_error_cleanup(int32_t **bufs, int32_t first_buf,
+                                          int32_t num_colors,
+                                          ColorResult *out_results,
+                                          int32_t completed_colors,
+                                          int32_t *buf_offsets,
+                                          uint32_t *color_list) {
+  for (int32_t j = first_buf; j < num_colors; j++)
+    free(bufs[j]);
   for (int32_t j = 0; j < completed_colors; j++)
     free(out_results[j].polygons);
-  free(edge_bufs);
-  free(edge_offsets);
+  free(bufs);
+  free(buf_offsets);
   free(color_list);
 }
 
-/* Hash table entry for color classification: key=rgba, value=pixel count or
-   edge buffer index. We reuse the generic HashEntry with uint64_t key. */
 int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
-                      ColorResult *out_results, int32_t out_capacity) {
+                      CoreMode mode, ColorResult *out_results,
+                      int32_t out_capacity) {
   int32_t num_pixels = width * height;
 
-  /* Load factor ~50% to avoid linear probing degradation and infinite loops.
+  /* Pass 1: Count pixels per color using hash table.
+     Load factor ~50% to avoid linear probing degradation and infinite loops.
      Use int64 to avoid overflow on large images. */
   int64_t color_cap_64 = num_pixels < 1024 ? 2048 : (int64_t)num_pixels * 2;
   if (color_cap_64 > INT32_MAX)
     return CORE_ERROR_CAPACITY;
   int32_t color_cap = (int32_t)color_cap_64;
 
-  /* Hash table: key=rgba, value=color index */
   HashEntry *color_table =
       (HashEntry *)calloc((size_t)color_cap, sizeof(HashEntry));
   if (!color_table)
@@ -539,110 +640,115 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
   int32_t num_colors = 0;
   uint32_t *color_list =
       (uint32_t *)malloc((size_t)out_capacity * sizeof(uint32_t));
-  int32_t **edge_bufs =
-      (int32_t **)calloc((size_t)out_capacity, sizeof(int32_t *));
-  int32_t *edge_offsets =
-      (int32_t *)calloc((size_t)out_capacity, sizeof(int32_t));
-  int32_t *edge_caps = (int32_t *)calloc((size_t)out_capacity, sizeof(int32_t));
-
-  if (!color_list || !edge_bufs || !edge_offsets || !edge_caps) {
+  if (!color_list) {
     free(color_table);
-    free(color_list);
-    free(edge_bufs);
-    free(edge_offsets);
-    free(edge_caps);
     return CORE_ERROR_ALLOC;
   }
 
-  static const int32_t initial_edge_cap = 256; /* 16 pixels worth */
+  for (int32_t i = 0; i < num_pixels; i++) {
+    int32_t off = i * 4;
+    uint32_t rgba =
+        rgba_key(pixels[off], pixels[off + 1], pixels[off + 2], pixels[off + 3]);
+    uint64_t key = (uint64_t)rgba;
 
-  /* Single pass: classify colors and build edges simultaneously */
+    int32_t slot = hash_find(color_table, color_cap, key);
+    if (slot >= 0) {
+      color_table[slot].value++;
+    } else {
+      if (num_colors >= out_capacity) {
+        free(color_table);
+        free(color_list);
+        return CORE_ERROR_CAPACITY;
+      }
+      hash_insert(color_table, color_cap, key, 1);
+      color_list[num_colors++] = rgba;
+    }
+  }
+
+  /* Allocate per-color buffers with exact sizes */
+  int32_t **bufs = (int32_t **)calloc((size_t)num_colors, sizeof(int32_t *));
+  int32_t *buf_offsets = (int32_t *)calloc((size_t)num_colors, sizeof(int32_t));
+  if (!bufs || !buf_offsets) {
+    free(color_table);
+    free(color_list);
+    free(bufs);
+    free(buf_offsets);
+    return CORE_ERROR_ALLOC;
+  }
+
+  /* Build a color -> index mapping using another hash table */
+  HashEntry *idx_table =
+      (HashEntry *)calloc((size_t)color_cap, sizeof(HashEntry));
+  if (!idx_table) {
+    free(color_table);
+    free(color_list);
+    free(bufs);
+    free(buf_offsets);
+    return CORE_ERROR_ALLOC;
+  }
+
+  /* ints per pixel: polygon mode = 16 (4 edges × 4 ints), rectangle mode = 2
+   * (x, y) */
+  int32_t ints_per_pixel = (mode == CORE_MODE_RECTANGLE) ? 2 : 16;
+
+  for (int32_t c = 0; c < num_colors; c++) {
+    uint64_t key = (uint64_t)color_list[c];
+    int32_t slot = hash_find(color_table, color_cap, key);
+    int32_t count = color_table[slot].value;
+    bufs[c] =
+        (int32_t *)malloc((size_t)count * ints_per_pixel * sizeof(int32_t));
+    if (!bufs[c]) {
+      for (int32_t j = 0; j < c; j++)
+        free(bufs[j]);
+      free(bufs);
+      free(buf_offsets);
+      free(color_table);
+      free(color_list);
+      free(idx_table);
+      return CORE_ERROR_ALLOC;
+    }
+    hash_insert(idx_table, color_cap, key, c);
+  }
+
+  /* Pass 2: Fill buffers */
   for (int32_t y = 0; y < height; y++) {
     for (int32_t x = 0; x < width; x++) {
       int32_t pi = (y * width + x) * 4;
       uint32_t rgba =
           rgba_key(pixels[pi], pixels[pi + 1], pixels[pi + 2], pixels[pi + 3]);
-      uint64_t key = (uint64_t)rgba;
+      int32_t slot = hash_find(idx_table, color_cap, (uint64_t)rgba);
+      int32_t c = idx_table[slot].value;
+      int32_t *buf = bufs[c];
+      int32_t off = buf_offsets[c];
 
-      int32_t slot = hash_find(color_table, color_cap, key);
-      int32_t c;
-      if (slot >= 0) {
-        c = color_table[slot].value;
+      if (mode == CORE_MODE_RECTANGLE) {
+        buf[off++] = x;
+        buf[off++] = y;
       } else {
-        if (num_colors >= out_capacity) {
-          for (int32_t j = 0; j < num_colors; j++)
-            free(edge_bufs[j]);
-          free(color_table);
-          free(color_list);
-          free(edge_bufs);
-          free(edge_offsets);
-          free(edge_caps);
-          return CORE_ERROR_CAPACITY;
-        }
-        c = num_colors;
-        hash_insert(color_table, color_cap, key, c);
-        color_list[c] = rgba;
-        edge_bufs[c] = (int32_t *)malloc(initial_edge_cap * sizeof(int32_t));
-        if (!edge_bufs[c]) {
-          for (int32_t j = 0; j < c; j++)
-            free(edge_bufs[j]);
-          free(color_table);
-          free(color_list);
-          free(edge_bufs);
-          free(edge_offsets);
-          free(edge_caps);
-          return CORE_ERROR_ALLOC;
-        }
-        edge_caps[c] = initial_edge_cap;
-        num_colors++;
+        buf[off++] = x;
+        buf[off++] = y;
+        buf[off++] = x + 1;
+        buf[off++] = y;
+        buf[off++] = x + 1;
+        buf[off++] = y;
+        buf[off++] = x + 1;
+        buf[off++] = y + 1;
+        buf[off++] = x + 1;
+        buf[off++] = y + 1;
+        buf[off++] = x;
+        buf[off++] = y + 1;
+        buf[off++] = x;
+        buf[off++] = y + 1;
+        buf[off++] = x;
+        buf[off++] = y;
       }
 
-      /* Grow edge buffer if needed (factor 1.5) */
-      int32_t needed = edge_offsets[c] + 16;
-      if (needed > edge_caps[c]) {
-        int32_t new_cap = edge_caps[c] + edge_caps[c] / 2;
-        if (new_cap < needed)
-          new_cap = needed;
-        int32_t *new_buf =
-            (int32_t *)realloc(edge_bufs[c], (size_t)new_cap * sizeof(int32_t));
-        if (!new_buf) {
-          for (int32_t j = 0; j < num_colors; j++)
-            free(edge_bufs[j]);
-          free(color_table);
-          free(color_list);
-          free(edge_bufs);
-          free(edge_offsets);
-          free(edge_caps);
-          return CORE_ERROR_ALLOC;
-        }
-        edge_bufs[c] = new_buf;
-        edge_caps[c] = new_cap;
-      }
-
-      int32_t *buf = edge_bufs[c];
-      int32_t off = edge_offsets[c];
-      buf[off++] = x;
-      buf[off++] = y;
-      buf[off++] = x + 1;
-      buf[off++] = y;
-      buf[off++] = x + 1;
-      buf[off++] = y;
-      buf[off++] = x + 1;
-      buf[off++] = y + 1;
-      buf[off++] = x + 1;
-      buf[off++] = y + 1;
-      buf[off++] = x;
-      buf[off++] = y + 1;
-      buf[off++] = x;
-      buf[off++] = y + 1;
-      buf[off++] = x;
-      buf[off++] = y;
-      edge_offsets[c] = off;
+      buf_offsets[c] = off;
     }
   }
 
   free(color_table);
-  free(edge_caps);
+  free(idx_table);
 
   /* Process each color through the pipeline (parallel) */
   {
@@ -663,8 +769,8 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
     if (!tasks || !threads) {
       free(tasks);
       free(threads);
-      pipeline_error_cleanup(edge_bufs, 0, num_colors, out_results, 0,
-                             edge_offsets, color_list);
+      pipeline_error_cleanup(bufs, 0, num_colors, out_results, 0, buf_offsets,
+                             color_list);
       return CORE_ERROR_ALLOC;
     }
 
@@ -676,8 +782,11 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
       int32_t count = colors_per_thread + (t < remainder ? 1 : 0);
       tasks[t].c_start = c_start;
       tasks[t].c_end = c_start + count;
-      tasks[t].edge_bufs = edge_bufs;
-      tasks[t].edge_offsets = edge_offsets;
+      tasks[t].mode = mode;
+      tasks[t].width = width;
+      tasks[t].height = height;
+      tasks[t].bufs = bufs;
+      tasks[t].buf_offsets = buf_offsets;
       tasks[t].out_results = out_results;
       tasks[t].color_list = color_list;
       tasks[t].error = 0;
@@ -698,18 +807,18 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
     if (first_error != 0) {
       /* Clean up all results — some threads may have succeeded */
       for (int32_t c = 0; c < num_colors; c++) {
-        free(edge_bufs[c]);
+        free(bufs[c]);
         free(out_results[c].polygons);
       }
-      free(edge_bufs);
-      free(edge_offsets);
+      free(bufs);
+      free(buf_offsets);
       free(color_list);
       return first_error;
     }
   }
 
-  free(edge_bufs);
-  free(edge_offsets);
+  free(bufs);
+  free(buf_offsets);
   free(color_list);
   return num_colors;
 }

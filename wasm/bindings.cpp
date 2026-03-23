@@ -8,7 +8,7 @@
 
 using emscripten::val;
 
-val processImage(val pixelsVal, int32_t width, int32_t height) {
+val processImage(val pixelsVal, int32_t width, int32_t height, int32_t mode) {
   if (width <= 0 || height <= 0 || (int64_t)width * height > INT32_MAX) {
     return val(CORE_ERROR_CAPACITY);
   }
@@ -19,8 +19,9 @@ val processImage(val pixelsVal, int32_t width, int32_t height) {
   int32_t maxColors = width * height;
   std::vector<ColorResult> results(maxColors);
 
-  int32_t numColors =
-      process_image(pixels.data(), width, height, results.data(), maxColors);
+  int32_t numColors = process_image(pixels.data(), width, height,
+                                    static_cast<CoreMode>(mode),
+                                    results.data(), maxColors);
   if (numColors < 0) {
     return val(numColors);
   }

@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { toSVG } from "./index.js";
+import { toSVG, toRectangles } from "./index.js";
 
 type MockImage = {
   width: number;
@@ -116,5 +116,91 @@ describe("toSVG end-to-end", () => {
     const img = { width: 1, height: 1, bitmap: { data } };
     const svg = await toSVG(img as any);
     assert.match(svg, /fill="#ff0000ff"/);
+  });
+});
+
+describe("toRectangles end-to-end", () => {
+  test("single pixel produces one 1x1 rectangle", async () => {
+    const img = makeImage(1, 1, [[255, 0, 0, 255]]);
+    const results = await toRectangles(img as any);
+    assert.equal(results.length, 1);
+    assert.equal(results[0]!.color, "#ff0000ff");
+    assert.deepEqual(results[0]!.rects, [{ x: 0, y: 0, w: 1, h: 1 }]);
+  });
+
+  test("2x1 same color produces one 2x1 rectangle", async () => {
+    const img = makeImage(2, 1, [
+      [0, 0, 0, 255],
+      [0, 0, 0, 255],
+    ]);
+    const results = await toRectangles(img as any);
+    assert.equal(results.length, 1);
+    assert.deepEqual(results[0]!.rects, [{ x: 0, y: 0, w: 2, h: 1 }]);
+  });
+
+  test("2x2 single color produces one 2x2 rectangle", async () => {
+    const img = makeImage(2, 2, [
+      [0, 0, 255, 255],
+      [0, 0, 255, 255],
+      [0, 0, 255, 255],
+      [0, 0, 255, 255],
+    ]);
+    const results = await toRectangles(img as any);
+    assert.equal(results.length, 1);
+    assert.deepEqual(results[0]!.rects, [{ x: 0, y: 0, w: 2, h: 2 }]);
+  });
+
+  test("L-shape produces two rectangles", async () => {
+    // ##
+    // #
+    const img = makeImage(2, 2, [
+      [255, 0, 0, 255],
+      [255, 0, 0, 255],
+      [255, 0, 0, 255],
+      [0, 0, 0, 255],
+    ]);
+    const results = await toRectangles(img as any);
+    const red = results.find((r) => r.color === "#ff0000ff")!;
+    assert.equal(red.rects.length, 2);
+    // Top row: 2x1, then left column remainder: 1x1
+    assert.deepEqual(red.rects[0], { x: 0, y: 0, w: 2, h: 1 });
+    assert.deepEqual(red.rects[1], { x: 0, y: 1, w: 1, h: 1 });
+  });
+
+  test("3x3 checkerboard produces individual 1x1 rectangles", async () => {
+    const B = [0, 0, 0, 255];
+    const W = [255, 255, 255, 255];
+    const img = makeImage(3, 3, [B, W, B, W, B, W, B, W, B]);
+    const results = await toRectangles(img as any);
+    const black = results.find((r) => r.color === "#000000ff")!;
+    const white = results.find((r) => r.color === "#ffffffff")!;
+    assert.equal(black.rects.length, 5);
+    assert.equal(white.rects.length, 4);
+    // Each rect is 1x1
+    for (const r of [...black.rects, ...white.rects]) {
+      assert.equal(r.w, 1);
+      assert.equal(r.h, 1);
+    }
+  });
+
+  test("2x1 different colors produces two results", async () => {
+    const img = makeImage(2, 1, [
+      [255, 0, 0, 255],
+      [0, 255, 0, 255],
+    ]);
+    const results = await toRectangles(img as any);
+    assert.equal(results.length, 2);
+    assert.deepEqual(results[0]!.rects, [{ x: 0, y: 0, w: 1, h: 1 }]);
+    assert.deepEqual(results[1]!.rects, [{ x: 1, y: 0, w: 1, h: 1 }]);
+  });
+
+  test("vertical 1x2 same color produces one 1x2 rectangle", async () => {
+    const img = makeImage(1, 2, [
+      [0, 0, 0, 255],
+      [0, 0, 0, 255],
+    ]);
+    const results = await toRectangles(img as any);
+    assert.equal(results.length, 1);
+    assert.deepEqual(results[0]!.rects, [{ x: 0, y: 0, w: 1, h: 2 }]);
   });
 });

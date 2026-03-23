@@ -27,6 +27,36 @@ function rgbaToHex(rgba: number): string {
   );
 }
 
+function normalizePixels(
+  data: Buffer | Uint8Array | Uint8ClampedArray | number[],
+): Uint8Array {
+  if (data instanceof Uint8Array) return data;
+  return new Uint8Array(data);
+}
+
+function processImage(
+  image: JimpImage,
+  mode: number,
+): { rgba: number; polygons: Int32Array }[] {
+  const pixels = normalizePixels(image.bitmap.data);
+  const results = wasmModule.processImage(
+    pixels,
+    image.width,
+    image.height,
+    mode,
+  );
+  if (typeof results === "number" && results < 0) {
+    throw new Error(`wasm processImage failed: ${results}`);
+  }
+  return results;
+}
+
+function svgHeader(width: number, height: number): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`;
+}
+
+/* --- Polygon mode --- */
+
 function parseFlatPolygons(buf: Int32Array): [number, number][][] {
   const polygons: [number, number][][] = [];
   let pos = 0;
@@ -64,65 +94,81 @@ function generateSVGPathData(polygons: [number, number][][]): string {
     .join("");
 }
 
-function normalizePixels(
-  data: Buffer | Uint8Array | Uint8ClampedArray | number[],
-): Uint8Array {
-  if (data instanceof Uint8Array) return data;
-  return new Uint8Array(data);
-}
-
-export async function toSVG(image: JimpImage) {
-  const pixels = normalizePixels(image.bitmap.data);
-
-  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${image.width}" height="${image.height}" viewBox="0 0 ${image.width} ${image.height}">`;
-
-  const results: { rgba: number; polygons: Int32Array }[] =
-    wasmModule.processImage(pixels, image.width, image.height);
-
-  if (typeof results === "number" && results < 0) {
-    throw new Error(`wasm processImage failed: ${results}`);
-  }
-
+export async function toSVG(image: JimpImage): Promise<string> {
+  const results = processImage(image, 0);
+  let svg = svgHeader(image.width, image.height);
   for (const { rgba, polygons } of results) {
-    const hex = rgbaToHex(rgba);
-    const polys = parseFlatPolygons(polygons);
-    const d = generateSVGPathData(polys);
-    svg += `<path stroke="none" fill="${hex}" d="${d}"/>`;
+    const d = generateSVGPathData(parseFlatPolygons(polygons));
+    svg += `<path stroke="none" fill="${rgbaToHex(rgba)}" d="${d}"/>`;
   }
-
   svg += "</svg>";
   return svg;
 }
+
+/* --- Rectangle mode --- */
+
+export type Rect = { x: number; y: number; w: number; h: number };
+
+export type RectResult = {
+  color: string;
+  rects: Rect[];
+};
+
+function parseFlatRectangles(buf: Int32Array): Rect[] {
+  const rects: Rect[] = [];
+  for (let i = 0; i + 4 <= buf.length; i += 4) {
+    rects.push({
+      x: buf[i]!,
+      y: buf[i + 1]!,
+      w: buf[i + 2]!,
+      h: buf[i + 3]!,
+    });
+  }
+  return rects;
+}
+
+export async function toRectangles(image: JimpImage): Promise<RectResult[]> {
+  const results = processImage(image, 1);
+  return results.map(({ rgba, polygons }) => ({
+    color: rgbaToHex(rgba),
+    rects: parseFlatRectangles(polygons),
+  }));
+}
+
+export async function toRectSVG(image: JimpImage): Promise<string> {
+  const results = await toRectangles(image);
+  let svg = svgHeader(image.width, image.height);
+  for (const { color, rects } of results) {
+    for (const { x, y, w, h } of rects) {
+      svg += `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${color}"/>`;
+    }
+  }
+  svg += "</svg>";
+  return svg;
+}
+
+/* --- Perf --- */
 
 export async function toSVGWithPerf(
   image: JimpImage,
 ): Promise<{ svg: string; perf: PerfResult }> {
   const t0 = performance.now();
-
   const pixels = normalizePixels(image.bitmap.data);
-
   const tPixels = performance.now();
 
-  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${image.width}" height="${image.height}" viewBox="0 0 ${image.width} ${image.height}">`;
-
   const results: { rgba: number; polygons: Int32Array }[] =
-    wasmModule.processImage(pixels, image.width, image.height);
-
+    wasmModule.processImage(pixels, image.width, image.height, 0);
   if (typeof results === "number" && results < 0) {
     throw new Error(`wasm processImage failed: ${results}`);
   }
-
   const tWasm = performance.now();
 
+  let svg = svgHeader(image.width, image.height);
   for (const { rgba, polygons } of results) {
-    const hex = rgbaToHex(rgba);
-    const polys = parseFlatPolygons(polygons);
-    const d = generateSVGPathData(polys);
-    svg += `<path stroke="none" fill="${hex}" d="${d}"/>`;
+    const d = generateSVGPathData(parseFlatPolygons(polygons));
+    svg += `<path stroke="none" fill="${rgbaToHex(rgba)}" d="${d}"/>`;
   }
-
   svg += "</svg>";
-
   const tTotal = performance.now();
 
   return {
