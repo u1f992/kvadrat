@@ -516,100 +516,106 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
                       ColorResult *out_results, int32_t out_capacity) {
   int32_t num_pixels = width * height;
 
-  /* Pass 1: Count pixels per color using hash table.
-     key = rgba packed as uint64_t, value = count. */
   /* Load factor ~50% to avoid linear probing degradation and infinite loops.
      Use int64 to avoid overflow on large images. */
-  int64_t color_cap_64 =
-      num_pixels < 1024 ? 2048 : (int64_t)num_pixels * 2;
+  int64_t color_cap_64 = num_pixels < 1024 ? 2048 : (int64_t)num_pixels * 2;
   if (color_cap_64 > INT32_MAX)
     return CORE_ERROR_CAPACITY;
   int32_t color_cap = (int32_t)color_cap_64;
+
+  /* Hash table: key=rgba, value=color index */
   HashEntry *color_table =
       (HashEntry *)calloc((size_t)color_cap, sizeof(HashEntry));
   if (!color_table)
     return CORE_ERROR_ALLOC;
 
-  /* Track unique colors in insertion order */
   int32_t num_colors = 0;
   uint32_t *color_list =
       (uint32_t *)malloc((size_t)out_capacity * sizeof(uint32_t));
-  if (!color_list) {
-    free(color_table);
-    return CORE_ERROR_ALLOC;
-  }
+  int32_t **edge_bufs =
+      (int32_t **)calloc((size_t)out_capacity, sizeof(int32_t *));
+  int32_t *edge_offsets =
+      (int32_t *)calloc((size_t)out_capacity, sizeof(int32_t));
+  int32_t *edge_caps =
+      (int32_t *)calloc((size_t)out_capacity, sizeof(int32_t));
 
-  for (int32_t i = 0; i < num_pixels; i++) {
-    int32_t off = i * 4;
-    uint32_t rgba =
-        rgba_key(pixels[off], pixels[off + 1], pixels[off + 2], pixels[off + 3]);
-    uint64_t key = (uint64_t)rgba;
-
-    int32_t slot = hash_find(color_table, color_cap, key);
-    if (slot >= 0) {
-      color_table[slot].value++;
-    } else {
-      if (num_colors >= out_capacity) {
-        free(color_table);
-        free(color_list);
-        return CORE_ERROR_CAPACITY;
-      }
-      hash_insert(color_table, color_cap, key, 1);
-      color_list[num_colors++] = rgba;
-    }
-  }
-
-  /* Allocate edge buffers per color: 4 edges * 4 ints = 16 ints per pixel */
-  int32_t **edge_bufs = (int32_t **)calloc((size_t)num_colors, sizeof(int32_t *));
-  int32_t *edge_offsets = (int32_t *)calloc((size_t)num_colors, sizeof(int32_t));
-  if (!edge_bufs || !edge_offsets) {
+  if (!color_list || !edge_bufs || !edge_offsets || !edge_caps) {
     free(color_table);
     free(color_list);
     free(edge_bufs);
     free(edge_offsets);
+    free(edge_caps);
     return CORE_ERROR_ALLOC;
   }
 
-  /* Build a color -> index mapping using another hash table */
-  HashEntry *idx_table =
-      (HashEntry *)calloc((size_t)color_cap, sizeof(HashEntry));
-  if (!idx_table) {
-    free(color_table);
-    free(color_list);
-    free(edge_bufs);
-    free(edge_offsets);
-    return CORE_ERROR_ALLOC;
-  }
+#define INITIAL_EDGE_CAP 256 /* 16 pixels worth of edges (16 ints each) */
 
-  for (int32_t c = 0; c < num_colors; c++) {
-    uint64_t key = (uint64_t)color_list[c];
-    int32_t slot = hash_find(color_table, color_cap, key);
-    int32_t count = color_table[slot].value;
-    edge_bufs[c] = (int32_t *)malloc((size_t)count * 16 * sizeof(int32_t));
-    if (!edge_bufs[c]) {
-      for (int32_t j = 0; j < c; j++)
-        free(edge_bufs[j]);
-      free(edge_bufs);
-      free(edge_offsets);
-      free(color_table);
-      free(color_list);
-      free(idx_table);
-      return CORE_ERROR_ALLOC;
-    }
-    hash_insert(idx_table, color_cap, key, c);
-  }
-
-  /* Pass 2: Fill edges */
+  /* Single pass: classify colors and build edges simultaneously */
   for (int32_t y = 0; y < height; y++) {
     for (int32_t x = 0; x < width; x++) {
       int32_t pi = (y * width + x) * 4;
       uint32_t rgba =
           rgba_key(pixels[pi], pixels[pi + 1], pixels[pi + 2], pixels[pi + 3]);
-      int32_t slot = hash_find(idx_table, color_cap, (uint64_t)rgba);
-      int32_t c = idx_table[slot].value;
+      uint64_t key = (uint64_t)rgba;
+
+      int32_t slot = hash_find(color_table, color_cap, key);
+      int32_t c;
+      if (slot >= 0) {
+        c = color_table[slot].value;
+      } else {
+        if (num_colors >= out_capacity) {
+          for (int32_t j = 0; j < num_colors; j++)
+            free(edge_bufs[j]);
+          free(color_table);
+          free(color_list);
+          free(edge_bufs);
+          free(edge_offsets);
+          free(edge_caps);
+          return CORE_ERROR_CAPACITY;
+        }
+        c = num_colors;
+        hash_insert(color_table, color_cap, key, c);
+        color_list[c] = rgba;
+        edge_bufs[c] =
+            (int32_t *)malloc(INITIAL_EDGE_CAP * sizeof(int32_t));
+        if (!edge_bufs[c]) {
+          for (int32_t j = 0; j < c; j++)
+            free(edge_bufs[j]);
+          free(color_table);
+          free(color_list);
+          free(edge_bufs);
+          free(edge_offsets);
+          free(edge_caps);
+          return CORE_ERROR_ALLOC;
+        }
+        edge_caps[c] = INITIAL_EDGE_CAP;
+        num_colors++;
+      }
+
+      /* Grow edge buffer if needed (factor 1.5) */
+      int32_t needed = edge_offsets[c] + 16;
+      if (needed > edge_caps[c]) {
+        int32_t new_cap = edge_caps[c] + edge_caps[c] / 2;
+        if (new_cap < needed)
+          new_cap = needed;
+        int32_t *new_buf = (int32_t *)realloc(
+            edge_bufs[c], (size_t)new_cap * sizeof(int32_t));
+        if (!new_buf) {
+          for (int32_t j = 0; j < num_colors; j++)
+            free(edge_bufs[j]);
+          free(color_table);
+          free(color_list);
+          free(edge_bufs);
+          free(edge_offsets);
+          free(edge_caps);
+          return CORE_ERROR_ALLOC;
+        }
+        edge_bufs[c] = new_buf;
+        edge_caps[c] = new_cap;
+      }
+
       int32_t *buf = edge_bufs[c];
       int32_t off = edge_offsets[c];
-
       buf[off++] = x;
       buf[off++] = y;
       buf[off++] = x + 1;
@@ -626,13 +632,14 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
       buf[off++] = y + 1;
       buf[off++] = x;
       buf[off++] = y;
-
       edge_offsets[c] = off;
     }
   }
 
+#undef INITIAL_EDGE_CAP
+
   free(color_table);
-  free(idx_table);
+  free(edge_caps);
 
   /* Process each color through the pipeline (parallel) */
   {
