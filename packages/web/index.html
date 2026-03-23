@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>kvadrat</title>
+  </head>
+  <body>
+    <h1>kvadrat <small id="version"></small></h1>
+    <form id="form" onsubmit="return false">
+      <div>
+        <label for="file">Image:</label>
+        <input type="file" id="file" accept="image/*" required />
+      </div>
+      <div>
+        <label for="mode">Mode:</label>
+        <select id="mode">
+          <option value="polygon">polygon</option>
+          <option value="rectangle">rectangle</option>
+          <option value="css-background">css-background</option>
+        </select>
+      </div>
+      <div>
+        <label for="material">Material:</label>
+        <select id="material" disabled>
+          <option value="linear-gradient">linear-gradient</option>
+          <option value="svg">svg</option>
+        </select>
+      </div>
+      <div>
+        <label for="selector">Selector:</label>
+        <input type="text" id="selector" value=".image" disabled />
+      </div>
+      <button type="submit" id="run">Run</button>
+    </form>
+    <div id="result"></div>
+
+    <script type="module">
+      import { toSVG, toRectSVG, toCSSBackground } from "./index.js";
+      import { VERSION } from "./version.js";
+
+      document.getElementById("version").textContent = "v" + VERSION;
+
+      const form = document.getElementById("form");
+      const fileInput = document.getElementById("file");
+      const modeSelect = document.getElementById("mode");
+      const materialSelect = document.getElementById("material");
+      const selectorInput = document.getElementById("selector");
+      const runButton = document.getElementById("run");
+      const result = document.getElementById("result");
+
+      modeSelect.addEventListener("change", () => {
+        const isCss = modeSelect.value === "css-background";
+        materialSelect.disabled = !isCss;
+        selectorInput.disabled = !isCss;
+      });
+
+      function loadImage(file) {
+        return new Promise((resolve, reject) => {
+          const url = URL.createObjectURL(file);
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            URL.revokeObjectURL(url);
+            resolve({
+              width: canvas.width,
+              height: canvas.height,
+              bitmap: { data: new Uint8Array(imageData.data.buffer) },
+            });
+          };
+          img.onerror = () => {
+            URL.revokeObjectURL(url);
+            reject(new Error("Failed to load image"));
+          };
+          img.src = url;
+        });
+      }
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        result.innerHTML = "";
+
+        const file = fileInput.files[0];
+        if (!file) return;
+
+        runButton.disabled = true;
+        runButton.textContent = "Processing...";
+        try {
+
+        const image = await loadImage(file);
+        const mode = modeSelect.value;
+
+        if (mode === "css-background") {
+          const selector = selectorInput.value || ".image";
+          const material = materialSelect.value;
+
+          const [previewCss, css] = await Promise.all([
+            toCSSBackground(image, ".image", { material }),
+            toCSSBackground(image, selector, { material }),
+          ]);
+
+          const style = document.createElement("style");
+          style.textContent = previewCss;
+          result.appendChild(style);
+          const div = document.createElement("div");
+          div.className = "image";
+          result.appendChild(div);
+
+          const textarea = document.createElement("textarea");
+          textarea.value = css;
+          textarea.rows = 20;
+          textarea.cols = 80;
+          textarea.readOnly = true;
+          result.appendChild(textarea);
+        } else {
+          const svg =
+            mode === "rectangle"
+              ? await toRectSVG(image)
+              : await toSVG(image);
+          const img = document.createElement("img");
+          img.src = "data:image/svg+xml," + encodeURIComponent(svg);
+          result.appendChild(img);
+        }
+        } finally {
+          runButton.disabled = false;
+          runButton.textContent = "Run";
+        }
+      });
+    </script>
+  </body>
+</html>

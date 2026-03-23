@@ -128,7 +128,8 @@ dist
 # Stores VSCode versions used for testing VSCode extensions
 .vscode-test
 
-# Emscripten build output
+# Build-generated source
+src/version.ts
 src/wasm/
 
 # yarn v2

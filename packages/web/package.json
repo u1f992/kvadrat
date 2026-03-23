@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "shx mkdir -p dist/wasm && shx cp index.html dist/ && shx cp ../../dist/index.js ../../dist/version.js dist/ && shx cp ../../dist/wasm/core.js ../../dist/wasm/core.wasm dist/wasm/"
+  },
+  "devDependencies": {
+    "shx": "^0.4.0"
+  }
+}

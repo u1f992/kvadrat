@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 // @ts-ignore -- Emscripten-generated module, no .d.ts
 import createModule from "./wasm/core.js";
 

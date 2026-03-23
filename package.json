@@ -9,7 +9,7 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "build:wasm": "devcontainer exec --workspace-folder . make -C wasm",
     "clean:wasm": "devcontainer exec --workspace-folder . make -C wasm clean",
-    "build:version": "node -e \"const fs=require('node:fs');fs.writeFileSync('src/version.ts','export const VERSION=\\''+JSON.parse(fs.readFileSync('package.json',{encoding:'utf-8'})).version+'\\'',{encoding:'utf-8'})\"",
+    "build:version": "node scripts/version.js",
     "build": "npm run build:wasm && npm run build:version && npm run format && tsc && shx mkdir -p dist/wasm && shx cp src/wasm/core.js src/wasm/core.wasm dist/wasm/",
     "test": "npm run build && node --test \"dist/**/*.test.js\""
   },
