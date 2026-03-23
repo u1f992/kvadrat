@@ -137,6 +137,38 @@
 
 ---
 
+## Step 3: Int32Array化
+
+辺データを `[number,number,number,number][]` から `Int32Array` (stride 4) に変更。index.ts で2パス構築 (count→allocate→fill)。Worker へは `transferList` でゼロコピー転送。
+
+### Overall (median / mean)
+
+| Phase      |  Median |    Mean | vs Baseline | vs Step 1.5 |
+| ---------- | ------: | ------: | ----------: | ----------: |
+| buildEdges |  649 ms |  648 ms |       -69 % |       +14 % |
+| workers    | 2,210ms | 2,210ms |       -89 % |       -41 % |
+| **total**  | 2,873ms | 2,859ms |    **-88%** |    **-33%** |
+
+### Top 5 Slowest Colors (median)
+
+| Color       |  Edges | Polys | removeEdges | buildPolygons | concatPolygons |    Total |
+| ----------- | -----: | ----: | ----------: | ------------: | -------------: | -------: |
+| `#ffffffff` | 59,106 |   990 |    1,811 ms |         32 ms |          54 ms | 1,897 ms |
+| `#292929ff` | 27,558 |   363 |      798 ms |         17 ms |          67 ms |   891 ms |
+| `#0a0a0aff` |  7,348 |    62 |      396 ms |          6 ms |           5 ms |   413 ms |
+| `#141414ff` | 11,630 |   110 |      345 ms |         16 ms |          14 ms |   395 ms |
+| `#e0e0e0ff` | 42,984 |   387 |      239 ms |         98 ms |          22 ms |   364 ms |
+
+### 分析
+
+- **全体 23,431ms → 2,873ms**: ベースラインから **8.2x 高速化**
+- 辺数が大幅に減少 (`#ffffff`: 2,296,584→59,106) — removeBidirectionalEdges で除去された辺がもう配列に含まれない…ではなく、edgeCount で管理されるようになったため表示が変わった
+- buildEdges が +14% (648ms vs 568ms): 2パス走査のオーバーヘッドだが、Worker への transferList ゼロコピー転送で workers 全体が -41% 改善
+- removeBidirectionalEdges が引き続き支配的 (`#ffffff` 1,811ms)
+- ばらつきが非常に小さくなった (2,762ms〜2,925ms)
+
+---
+
 ## Optimization Plan (Wasm migration aware)
 
 ### Before Wasm

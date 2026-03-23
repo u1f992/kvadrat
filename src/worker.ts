@@ -5,14 +5,23 @@ import { ColorHex } from "./color-hex.js";
 const pointEquals = (a: [number, number], b: [number, number]) =>
   a[0] === b[0] && a[1] === b[1];
 
+/**
+ * Remove bidirectional edge pairs in-place. Returns the new edge count.
+ * Edges are stored as a flat Int32Array with stride 4: [x1,y1,x2,y2, ...].
+ */
 export function removeBidirectionalEdges(
-  edges: [number, number, number, number][],
-) {
+  edges: Int32Array,
+  edgeCount: number,
+): number {
   const seen = new Map<string, number>();
   const toRemove = new Set<number>();
 
-  for (let i = 0; i < edges.length; i++) {
-    const [x1, y1, x2, y2] = edges[i]!;
+  for (let i = 0; i < edgeCount; i++) {
+    const off = i * 4;
+    const x1 = edges[off]!;
+    const y1 = edges[off + 1]!;
+    const x2 = edges[off + 2]!;
+    const y2 = edges[off + 3]!;
     const key = `${x1},${y1},${x2},${y2}`;
     const reverseKey = `${x2},${y2},${x1},${y1}`;
 
@@ -26,19 +35,28 @@ export function removeBidirectionalEdges(
   }
 
   let writeIndex = 0;
-  for (let readIndex = 0; readIndex < edges.length; readIndex++) {
+  for (let readIndex = 0; readIndex < edgeCount; readIndex++) {
     if (!toRemove.has(readIndex)) {
-      edges[writeIndex++] = edges[readIndex]!;
+      if (writeIndex !== readIndex) {
+        const rOff = readIndex * 4;
+        const wOff = writeIndex * 4;
+        edges[wOff] = edges[rOff]!;
+        edges[wOff + 1] = edges[rOff + 1]!;
+        edges[wOff + 2] = edges[rOff + 2]!;
+        edges[wOff + 3] = edges[rOff + 3]!;
+      }
+      writeIndex++;
     }
   }
-  edges.length = writeIndex;
+  return writeIndex;
 }
 
-export function buildPolygons(edges: [number, number, number, number][]) {
+export function buildPolygons(edges: Int32Array, edgeCount: number) {
   // Build adjacency index: start-point -> list of edge indices
   const adj = new Map<string, number[]>();
-  for (let i = 0; i < edges.length; i++) {
-    const key = `${edges[i]![0]},${edges[i]![1]}`;
+  for (let i = 0; i < edgeCount; i++) {
+    const off = i * 4;
+    const key = `${edges[off]},${edges[off + 1]}`;
     let list = adj.get(key);
     if (!list) {
       list = [];
@@ -47,15 +65,13 @@ export function buildPolygons(edges: [number, number, number, number][]) {
     list.push(i);
   }
 
-  const used = new Uint8Array(edges.length);
-  let remaining = edges.length;
-  // Scan pointer for finding unused starting edges
+  const used = new Uint8Array(edgeCount);
+  let remaining = edgeCount;
   let startScan = 0;
 
   const polygons: [number, number][][] = [];
 
   while (remaining > 0) {
-    // Find an unused edge to start a new polygon
     while (used[startScan]) startScan++;
 
     const polygon: [number, number][] = [];
@@ -64,16 +80,18 @@ export function buildPolygons(edges: [number, number, number, number][]) {
     let edgeIdx = startScan;
     used[edgeIdx] = 1;
     remaining--;
-    let edge = edges[edgeIdx]!;
-    polygon.push([edge[0], edge[1]]);
-    polygon.push([edge[2], edge[3]]);
+    let off = edgeIdx * 4;
+    let ex1 = edges[off]!;
+    let ey1 = edges[off + 1]!;
+    let ex2 = edges[off + 2]!;
+    let ey2 = edges[off + 3]!;
+    polygon.push([ex1, ey1]);
+    polygon.push([ex2, ey2]);
 
     do {
-      // Look up edges starting at the current edge's end point
-      const key = `${edge[2]},${edge[3]}`;
+      const key = `${ex2},${ey2}`;
       const candidates = adj.get(key);
-      if (!candidates)
-        throw new Error(`no next edge found at ${edge[2]},${edge[3]}`);
+      if (!candidates) throw new Error(`no next edge found at ${ex2},${ey2}`);
 
       let foundEdge = false;
       for (let ci = 0; ci < candidates.length; ci++) {
@@ -83,31 +101,31 @@ export function buildPolygons(edges: [number, number, number, number][]) {
         foundEdge = true;
         used[idx] = 1;
         remaining--;
-        edge = edges[idx]!;
+        off = idx * 4;
+        ex1 = edges[off]!;
+        ey1 = edges[off + 1]!;
+        ex2 = edges[off + 2]!;
+        ey2 = edges[off + 3]!;
 
         const secondLastPoint = polygon[polygon.length - 2]!;
         const lastPoint = polygon[polygon.length - 1]!;
-        const newPoint: [number, number] = [edge[2], edge[3]];
         // Extend polygon end if it's continuing in the same direction
         if (
           secondLastPoint[0] === lastPoint[0] && // polygon ends vertical
-          lastPoint[0] === newPoint[0]
+          lastPoint[0] === ex2
         ) {
-          // new point is vertical, too
-          polygon[polygon.length - 1]![1] = newPoint[1];
+          polygon[polygon.length - 1]![1] = ey2;
         } else if (
           secondLastPoint[1] === lastPoint[1] && // polygon ends horizontal
-          lastPoint[1] === newPoint[1]
+          lastPoint[1] === ey2
         ) {
-          // new point is horizontal, too
-          polygon[polygon.length - 1]![0] = newPoint[0];
+          polygon[polygon.length - 1]![0] = ex2;
         } else {
-          polygon.push(newPoint); // new direction
+          polygon.push([ex2, ey2]);
         }
         break;
       }
-      if (!foundEdge)
-        throw new Error(`no next edge found at ${edge[2]},${edge[3]}`);
+      if (!foundEdge) throw new Error(`no next edge found at ${ex2},${ey2}`);
     } while (!pointEquals(polygon[polygon.length - 1]!, polygon[0]!));
 
     // Move polygon's start and end point into a corner
@@ -115,14 +133,12 @@ export function buildPolygons(edges: [number, number, number, number][]) {
       polygon[0]![0] === polygon[1]![0] &&
       polygon[polygon.length - 2]![0] === polygon[polygon.length - 1]![0]
     ) {
-      // start/end is along a vertical line
       polygon.length--;
       polygon[0]![1] = polygon[polygon.length - 1]![1];
     } else if (
       polygon[0]![1] === polygon[1]![1] &&
       polygon[polygon.length - 2]![1] === polygon[polygon.length - 1]![1]
     ) {
-      // start/end is along a horizontal line
       polygon.length--;
       polygon[0]![0] = polygon[polygon.length - 1]![0];
     }
@@ -132,7 +148,6 @@ export function buildPolygons(edges: [number, number, number, number][]) {
 }
 
 export function concatPolygons(polygons: [number, number][][]) {
-  // If two paths touch in at least one point, pick such a point and include one path in the other's sequence of points
   for (let i = 0; i < polygons.length; i++) {
     const polygon = polygons[i]!;
     for (let j = 0; j < polygon.length; j++) {
@@ -140,12 +155,9 @@ export function concatPolygons(polygons: [number, number][][]) {
       for (let k = i + 1; k < polygons.length; k++) {
         const polygon2 = polygons[k]!;
         for (let l = 0; l < polygon2.length - 1; l++) {
-          // exclude end point (same as start)
           const point2 = polygon2[l]!;
           if (pointEquals(point, point2)) {
-            // Embed polygon2 into polygon
             if (l > 0) {
-              // Touching point is not other polygon's start/end
               polygon.splice.apply(
                 polygon,
                 // @ts-ignore
@@ -168,7 +180,6 @@ export function concatPolygons(polygons: [number, number][][]) {
 }
 
 export const generateSVGPathData = (polygons: [number, number][][]) =>
-  // Generate SVG path data
   polygons
     .map(
       (polygon) =>
@@ -201,15 +212,15 @@ export type WorkerPerf = {
 
 export function toSVGPathWithPerf(
   hex: ColorHex,
-  edges: [number, number, number, number][],
+  edges: Int32Array,
+  edgeCount: number,
 ): { svg: string; perf: WorkerPerf } {
-  const edgeCount = edges.length;
   const t0 = performance.now();
 
-  removeBidirectionalEdges(edges);
+  edgeCount = removeBidirectionalEdges(edges, edgeCount);
   const t1 = performance.now();
 
-  const polygons = buildPolygons(edges);
+  const polygons = buildPolygons(edges, edgeCount);
   const t2 = performance.now();
 
   concatPolygons(polygons);
@@ -233,19 +244,16 @@ export function toSVGPathWithPerf(
   };
 }
 
-export function toSVGPath(
-  hex: ColorHex,
-  edges: [number, number, number, number][],
-) {
-  return toSVGPathWithPerf(hex, edges).svg;
+export function toSVGPath(hex: ColorHex, edges: Int32Array, edgeCount: number) {
+  return toSVGPathWithPerf(hex, edges, edgeCount).svg;
 }
 
 if (!isMainThread) {
-  const { hex, edges, returnPerf } = workerData;
+  const { hex, edges, edgeCount, returnPerf } = workerData;
   if (returnPerf) {
-    const result = toSVGPathWithPerf(hex, edges);
+    const result = toSVGPathWithPerf(hex, edges, edgeCount);
     parentPort!.postMessage(result);
   } else {
-    parentPort!.postMessage(toSVGPath(hex, edges));
+    parentPort!.postMessage(toSVGPath(hex, edges, edgeCount));
   }
 }

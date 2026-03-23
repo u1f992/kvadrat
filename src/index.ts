@@ -34,30 +34,59 @@ export async function toSVGWithPerf(
 
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${image.width}" height="${image.height}" viewBox="0 0 ${image.width} ${image.height}">`;
 
-  // Mark all four edges of each square in clockwise drawing direction
-  const edgesOf = new Map<ColorHex, [number, number, number, number][]>();
+  // Pass 1: Count pixels per color
+  const pixelCount = new Map<ColorHex, number>();
   for (let x = 0; x < image.width; x++) {
     for (let y = 0; y < image.height; y++) {
       const hex = colorHex(intToRGBA(image.getPixelColor(x, y)));
-      if (!edgesOf.has(hex)) {
-        edgesOf.set(hex, []);
-      }
+      pixelCount.set(hex, (pixelCount.get(hex) ?? 0) + 1);
+    }
+  }
+
+  // Allocate Int32Arrays: 4 edges per pixel, 4 ints per edge = 16 ints per pixel
+  const edgesOf = new Map<ColorHex, Int32Array>();
+  const offsets = new Map<ColorHex, number>();
+  for (const [hex, count] of pixelCount) {
+    edgesOf.set(hex, new Int32Array(count * 16));
+    offsets.set(hex, 0);
+  }
+
+  // Pass 2: Fill edge data
+  for (let x = 0; x < image.width; x++) {
+    for (let y = 0; y < image.height; y++) {
+      const hex = colorHex(intToRGBA(image.getPixelColor(x, y)));
+      const buf = edgesOf.get(hex)!;
+      let off = offsets.get(hex)!;
       // prettier-ignore
-      edgesOf.get(hex)!.push(
-        [x    , y    , x + 1, y    ],
-        [x + 1, y    , x + 1, y + 1],
-        [x + 1, y + 1, x    , y + 1],
-        [x    , y + 1, x    , y    ],
-      )
+      buf[off++] = x;
+      buf[off++] = y;
+      buf[off++] = x + 1;
+      buf[off++] = y;
+      // prettier-ignore
+      buf[off++] = x + 1;
+      buf[off++] = y;
+      buf[off++] = x + 1;
+      buf[off++] = y + 1;
+      // prettier-ignore
+      buf[off++] = x + 1;
+      buf[off++] = y + 1;
+      buf[off++] = x;
+      buf[off++] = y + 1;
+      // prettier-ignore
+      buf[off++] = x;
+      buf[off++] = y + 1;
+      buf[off++] = x;
+      buf[off++] = y;
+      offsets.set(hex, off);
     }
   }
 
   const tEdges = performance.now();
 
-  const totalEdges = [...edgesOf.values()].reduce(
-    (sum, e) => sum + e.length,
-    0,
-  );
+  let totalEdges = 0;
+  for (const count of pixelCount.values()) {
+    totalEdges += count * 4;
+  }
 
   // Phase 1: Spawn workers for heavy colors first so they run in parallel
   const WORKER_EDGE_THRESHOLD = 10000;
@@ -72,12 +101,14 @@ export async function toSVGWithPerf(
 
   for (let i = 0; i < entries.length; i++) {
     const [hex, edges] = entries[i]!;
-    if (edges.length > WORKER_EDGE_THRESHOLD) {
+    const edgeCount = edges.length / 4;
+    if (edgeCount > WORKER_EDGE_THRESHOLD) {
       workerSlots.push({
         index: i,
         promise: new Promise((resolve, reject) => {
           new Worker(WORKER, {
-            workerData: { hex, edges, returnPerf: true },
+            workerData: { hex, edges, edgeCount, returnPerf: true },
+            transferList: [edges.buffer],
           })
             .on("message", resolve)
             .on("error", reject);
@@ -89,8 +120,9 @@ export async function toSVGWithPerf(
   // Phase 2: Process lightweight colors on main thread while workers run
   for (let i = 0; i < entries.length; i++) {
     const [hex, edges] = entries[i]!;
-    if (edges.length <= WORKER_EDGE_THRESHOLD) {
-      results[i] = toSVGPathWithPerf(hex, edges);
+    const edgeCount = edges.length / 4;
+    if (edgeCount <= WORKER_EDGE_THRESHOLD) {
+      results[i] = toSVGPathWithPerf(hex, edges, edgeCount);
     }
   }
 

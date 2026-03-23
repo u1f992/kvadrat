@@ -7,117 +7,114 @@ import {
   generateSVGPathData,
 } from "./worker.js";
 
-type Edge = [number, number, number, number];
-
-/** Generate the 4 clockwise edges for a pixel at (x, y). */
-function pixelEdges(x: number, y: number): Edge[] {
+/** Generate a flat Int32Array of 4 clockwise edges for a pixel at (x, y). */
+function pixelEdges(x: number, y: number): number[] {
   return [
-    [x, y, x + 1, y],
-    [x + 1, y, x + 1, y + 1],
-    [x + 1, y + 1, x, y + 1],
-    [x, y + 1, x, y],
+    x,
+    y,
+    x + 1,
+    y,
+    x + 1,
+    y,
+    x + 1,
+    y + 1,
+    x + 1,
+    y + 1,
+    x,
+    y + 1,
+    x,
+    y + 1,
+    x,
+    y,
   ];
+}
+
+/** Create an Int32Array from multiple pixel edge arrays. */
+function makeEdges(...pixels: number[][]): Int32Array {
+  const flat: number[] = [];
+  for (const p of pixels) flat.push(...p);
+  return new Int32Array(flat);
 }
 
 describe("removeBidirectionalEdges", () => {
   test("single pixel: all 4 edges remain", () => {
-    const edges: Edge[] = pixelEdges(0, 0);
-    removeBidirectionalEdges(edges);
-    assert.equal(edges.length, 4);
+    const edges = makeEdges(pixelEdges(0, 0));
+    const count = removeBidirectionalEdges(edges, 4);
+    assert.equal(count, 4);
   });
 
   test("2x1 horizontal pixels: shared vertical edge removed", () => {
-    // Two adjacent pixels share the edge between x=1 columns
-    //  (0,0)-(1,0) and (1,0)-(2,0)
-    const edges: Edge[] = [...pixelEdges(0, 0), ...pixelEdges(1, 0)];
-    removeBidirectionalEdges(edges);
-    // 8 original - 2 shared (bidirectional pair) = 6
-    assert.equal(edges.length, 6);
-    // The removed pair: [1,0,1,1] and [1,1,1,0]
-    const hasInternalEdge = edges.some(
-      ([x1, y1, x2, y2]) =>
-        (x1 === 1 && y1 === 0 && x2 === 1 && y2 === 1) ||
-        (x1 === 1 && y1 === 1 && x2 === 1 && y2 === 0),
-    );
-    assert.equal(hasInternalEdge, false);
+    const edges = makeEdges(pixelEdges(0, 0), pixelEdges(1, 0));
+    const count = removeBidirectionalEdges(edges, 8);
+    assert.equal(count, 6);
   });
 
   test("2x2 square: 4 internal edge pairs removed", () => {
-    const edges: Edge[] = [
-      ...pixelEdges(0, 0),
-      ...pixelEdges(1, 0),
-      ...pixelEdges(0, 1),
-      ...pixelEdges(1, 1),
-    ];
-    removeBidirectionalEdges(edges);
-    // 16 original - 8 (4 shared pairs) = 8 outer edges
-    assert.equal(edges.length, 8);
+    const edges = makeEdges(
+      pixelEdges(0, 0),
+      pixelEdges(1, 0),
+      pixelEdges(0, 1),
+      pixelEdges(1, 1),
+    );
+    const count = removeBidirectionalEdges(edges, 16);
+    assert.equal(count, 8);
   });
 });
 
 describe("buildPolygons", () => {
   test("single pixel: produces one rectangular polygon", () => {
-    const edges: Edge[] = pixelEdges(0, 0);
-    const polygons = buildPolygons(edges);
+    const edges = makeEdges(pixelEdges(0, 0));
+    const polygons = buildPolygons(edges, 4);
     assert.equal(polygons.length, 1);
-    // Should form a closed rectangle: first point == last point
     const p = polygons[0]!;
     assert.deepEqual(p[0], p[p.length - 1]);
   });
 
   test("2x1 horizontal: collinear edges merged", () => {
-    const edges: Edge[] = [...pixelEdges(0, 0), ...pixelEdges(1, 0)];
-    removeBidirectionalEdges(edges);
-    const polygons = buildPolygons(edges);
+    const edges = makeEdges(pixelEdges(0, 0), pixelEdges(1, 0));
+    const count = removeBidirectionalEdges(edges, 8);
+    const polygons = buildPolygons(edges, count);
     assert.equal(polygons.length, 1);
     const p = polygons[0]!;
-    // A 2x1 rectangle has 4 corners + closing point = 5 points
     assert.equal(p.length, 5);
   });
 
   test("2x2 square: 4 corners + closing point", () => {
-    const edges: Edge[] = [
-      ...pixelEdges(0, 0),
-      ...pixelEdges(1, 0),
-      ...pixelEdges(0, 1),
-      ...pixelEdges(1, 1),
-    ];
-    removeBidirectionalEdges(edges);
-    const polygons = buildPolygons(edges);
+    const edges = makeEdges(
+      pixelEdges(0, 0),
+      pixelEdges(1, 0),
+      pixelEdges(0, 1),
+      pixelEdges(1, 1),
+    );
+    const count = removeBidirectionalEdges(edges, 16);
+    const polygons = buildPolygons(edges, count);
     assert.equal(polygons.length, 1);
     const p = polygons[0]!;
     assert.equal(p.length, 5);
   });
 
   test("L-shape: produces correct polygon", () => {
-    // ##
-    // #
-    const edges: Edge[] = [
-      ...pixelEdges(0, 0),
-      ...pixelEdges(1, 0),
-      ...pixelEdges(0, 1),
-    ];
-    removeBidirectionalEdges(edges);
-    const polygons = buildPolygons(edges);
+    const edges = makeEdges(
+      pixelEdges(0, 0),
+      pixelEdges(1, 0),
+      pixelEdges(0, 1),
+    );
+    const count = removeBidirectionalEdges(edges, 12);
+    const polygons = buildPolygons(edges, count);
     assert.equal(polygons.length, 1);
     const p = polygons[0]!;
-    // L-shape has 6 corners + closing = 7 points
     assert.equal(p.length, 7);
   });
 
   test("two separate pixels: produces two polygons", () => {
-    // Pixels at (0,0) and (2,0) — not adjacent
-    const edges: Edge[] = [...pixelEdges(0, 0), ...pixelEdges(2, 0)];
-    const polygons = buildPolygons(edges);
+    const edges = makeEdges(pixelEdges(0, 0), pixelEdges(2, 0));
+    const polygons = buildPolygons(edges, 8);
     assert.equal(polygons.length, 2);
   });
 });
 
 describe("concatPolygons", () => {
   test("two touching polygons merged into one", () => {
-    // Two 1x1 squares sharing point (1,0)
-    // Polygon A: (0,0)→(1,0)→(1,1)→(0,1)→(0,0)
-    // Polygon B: (1,0)→(2,0)→(2,1)→(1,1)→(1,0)
     const polygons: [number, number][][] = [
       [
         [0, 0],
