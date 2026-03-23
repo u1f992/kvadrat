@@ -24,6 +24,21 @@ int32_t build_polygons(const int32_t *edges, int32_t edge_count, int32_t *out,
    Returns: new buf_len after merging, or negative on error. */
 int32_t concat_polygons(int32_t *buf, int32_t buf_len);
 
+/* Result for one color from process_image. */
+typedef struct {
+  uint32_t rgba;
+  int32_t *polygons;  /* flat polygon buffer, caller must free */
+  int32_t polygons_len;
+} ColorResult;
+
+/* Process an RGBA pixel buffer into per-color polygon buffers.
+   pixels: width * height * 4 bytes RGBA.
+   out_results: caller-provided array of ColorResult, capacity out_capacity.
+   Returns: number of colors written, or negative on error.
+   Caller must free each out_results[i].polygons. */
+int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
+                      ColorResult *out_results, int32_t out_capacity);
+
 #ifdef __cplusplus
 }
 #endif
