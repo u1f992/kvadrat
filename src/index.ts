@@ -185,21 +185,34 @@ export async function toRectSVG(
 
 /* --- CSS background mode --- */
 
+export type CSSBackgroundOptions = {
+  material?: "linear-gradient" | "svg";
+};
+
 export async function toCSSBackground(
   image: JimpImage,
   selector: string = ".image",
+  options: CSSBackgroundOptions = {},
 ): Promise<string> {
+  const { material = "linear-gradient" } = options;
   const results = await toRectangles(image);
-  const gradients: string[] = [];
+  const layers: string[] = [];
   for (const { color, rects } of results) {
     for (const { x, y, w, h } of rects) {
-      gradients.push(
-        `linear-gradient(${color},${color}) ${x}px ${y}px / ${w}px ${h}px no-repeat`,
-      );
+      if (material === "svg") {
+        const encoded = color.replace(/#/g, "%23");
+        layers.push(
+          `url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><rect fill='${encoded}' width='1' height='1'/></svg>") ${x}px ${y}px / ${w}px ${h}px no-repeat`,
+        );
+      } else {
+        layers.push(
+          `linear-gradient(${color},${color}) ${x}px ${y}px / ${w}px ${h}px no-repeat`,
+        );
+      }
     }
   }
 
-  return `${selector} {\n  width: ${image.width}px;\n  height: ${image.height}px;\n  background:\n    ${gradients.join(",\n    ")};\n}\n`;
+  return `${selector} {\n  width: ${image.width}px;\n  height: ${image.height}px;\n  background:\n    ${layers.join(",\n    ")};\n}\n`;
 }
 
 /* --- Perf --- */

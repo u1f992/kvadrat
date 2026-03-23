@@ -12,6 +12,7 @@ const {
   output,
   mode,
   "css-selector": cssSelector,
+  "css-material": cssMaterial,
   rgba,
   version,
   help,
@@ -21,6 +22,7 @@ const {
     output: { type: "string", short: "o" },
     mode: { type: "string", short: "m", default: "polygon" },
     "css-selector": { type: "string", default: ".image" },
+    "css-material": { type: "string", default: "linear-gradient" },
     rgba: { type: "boolean", default: false },
     version: { type: "boolean", short: "v" },
     help: { type: "boolean", short: "h" },
@@ -40,6 +42,7 @@ Options:
   -o, --output <file>       output file (.svg or .css)
   -m, --mode <mode>         polygon (default), rectangle, or css-background
   --css-selector <sel>      CSS selector (default: .image)
+  --css-material <type>     linear-gradient (default) or svg
   --rgba                    use #RRGGBBAA instead of fill-opacity attribute
   -v, --version             output the version number
   -h, --help                display help for command`,
@@ -56,7 +59,8 @@ if (!MODES.includes(mode as (typeof MODES)[number])) {
 const image = await Jimp.read(fs.readFileSync(input ?? process.stdin.fd));
 
 if (mode === "css-background") {
-  const css = await toCSSBackground(image, cssSelector);
+  const material = cssMaterial === "svg" ? "svg" : "linear-gradient";
+  const css = await toCSSBackground(image, cssSelector, { material });
   if (output) {
     fs.writeFileSync(output, css, { encoding: "utf-8" });
 
