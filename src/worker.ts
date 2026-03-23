@@ -1,8 +1,19 @@
 import { parentPort, isMainThread } from "node:worker_threads";
 import { performance } from "node:perf_hooks";
 import { ColorHex } from "./color-hex.js";
+// @ts-ignore -- Emscripten-generated module, no .d.ts
+import createModule from "./wasm/core.js";
 
 export const PERF_SYMBOL: unique symbol = Symbol("perf");
+
+const wasmModule = await createModule();
+const wasmRemoveBidirectionalEdges: (
+  edgesPtr: number,
+  edgeCount: number,
+) => number = wasmModule.cwrap("remove_bidirectional_edges", "number", [
+  "number",
+  "number",
+]);
 
 const pointEquals = (a: [number, number], b: [number, number]) =>
   a[0] === b[0] && a[1] === b[1];
@@ -15,42 +26,20 @@ export function removeBidirectionalEdges(
   edges: Int32Array,
   edgeCount: number,
 ): number {
-  const seen = new Map<string, number>();
-  const toRemove = new Set<number>();
-
-  for (let i = 0; i < edgeCount; i++) {
-    const off = i * 4;
-    const x1 = edges[off]!;
-    const y1 = edges[off + 1]!;
-    const x2 = edges[off + 2]!;
-    const y2 = edges[off + 3]!;
-    const key = `${x1},${y1},${x2},${y2}`;
-    const reverseKey = `${x2},${y2},${x1},${y1}`;
-
-    if (seen.has(reverseKey)) {
-      toRemove.add(i);
-      toRemove.add(seen.get(reverseKey)!);
-      seen.delete(reverseKey);
-    } else {
-      seen.set(key, i);
-    }
+  if (edgeCount <= 0) return 0;
+  const byteLength = edgeCount * 4 * 4; // 4 ints per edge, 4 bytes per int
+  const ptr = wasmModule._malloc(byteLength);
+  if (!ptr) throw new Error("wasm malloc failed");
+  try {
+    wasmModule.HEAP32.set(edges.subarray(0, edgeCount * 4), ptr / 4);
+    const newCount = wasmRemoveBidirectionalEdges(ptr, edgeCount);
+    if (newCount < 0) throw new Error("wasm remove_bidirectional_edges failed");
+    const result = wasmModule.HEAP32.subarray(ptr / 4, ptr / 4 + newCount * 4);
+    edges.set(result);
+    return newCount;
+  } finally {
+    wasmModule._free(ptr);
   }
-
-  let writeIndex = 0;
-  for (let readIndex = 0; readIndex < edgeCount; readIndex++) {
-    if (!toRemove.has(readIndex)) {
-      if (writeIndex !== readIndex) {
-        const rOff = readIndex * 4;
-        const wOff = writeIndex * 4;
-        edges[wOff] = edges[rOff]!;
-        edges[wOff + 1] = edges[rOff + 1]!;
-        edges[wOff + 2] = edges[rOff + 2]!;
-        edges[wOff + 3] = edges[rOff + 3]!;
-      }
-      writeIndex++;
-    }
-  }
-  return writeIndex;
 }
 
 export function buildPolygons(edges: Int32Array, edgeCount: number) {
