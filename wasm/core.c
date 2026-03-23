@@ -316,11 +316,24 @@ static int32_t poly_count(const int32_t *buf, int32_t buf_len) {
 
 int32_t concat_polygons(int32_t *buf, int32_t buf_len) {
   int32_t num_polys = poly_count(buf, buf_len);
+  if (num_polys <= 1)
+    return buf_len;
+
+  /* Build offset index for O(1) polygon access */
+  int32_t *offsets =
+      (int32_t *)malloc((size_t)num_polys * sizeof(int32_t));
+  if (!offsets)
+    return CORE_ERROR_ALLOC;
+  {
+    int32_t pos = 0;
+    for (int32_t n = 0; n < num_polys; n++) {
+      offsets[n] = pos;
+      pos += 1 + buf[pos] * 2;
+    }
+  }
 
   for (int32_t i = 0; i < num_polys; i++) {
-    int32_t i_off = poly_offset(buf, buf_len, i);
-    if (i_off < 0)
-      break;
+    int32_t i_off = offsets[i];
     int32_t i_pc = buf[i_off];
     int32_t i_pts = i_off + 1;
 
@@ -329,9 +342,7 @@ int32_t concat_polygons(int32_t *buf, int32_t buf_len) {
       int32_t jy = buf[i_pts + j * 2 + 1];
 
       for (int32_t k = i + 1; k < num_polys; k++) {
-        int32_t k_off = poly_offset(buf, buf_len, k);
-        if (k_off < 0)
-          break;
+        int32_t k_off = offsets[k];
         int32_t k_pc = buf[k_off];
         int32_t k_pts = k_off + 1;
         int32_t k_size = 1 + k_pc * 2;
@@ -343,23 +354,28 @@ int32_t concat_polygons(int32_t *buf, int32_t buf_len) {
           if (jx != lx || jy != ly)
             continue;
 
-          /* Save polygon k's points to a temp buffer before modifying buf */
+          /* Save polygon k's points to a temp buffer */
           int32_t *k_copy =
               (int32_t *)malloc((size_t)k_size * sizeof(int32_t));
-          if (!k_copy)
+          if (!k_copy) {
+            free(offsets);
             return CORE_ERROR_ALLOC;
+          }
           memcpy(k_copy, buf + k_off, (size_t)k_size * sizeof(int32_t));
 
-          /* Remove polygon k from buf first */
+          /* Remove polygon k from buf */
           int32_t after_k = k_off + k_size;
           memmove(buf + k_off, buf + after_k,
                   (size_t)(buf_len - after_k) * sizeof(int32_t));
           buf_len -= k_size;
+
+          /* Update offsets: shift entries after k, remove k */
+          for (int32_t n = k; n < num_polys - 1; n++)
+            offsets[n] = offsets[n + 1] - k_size;
           num_polys--;
 
-          /* Now insert points from k_copy into polygon i.
-             i_off is unchanged (k was after i). */
-          int32_t insert_count = k_pc - 1; /* skip last point (== first) */
+          /* Insert points from k_copy into polygon i */
+          int32_t insert_count = k_pc - 1;
           int32_t insert_elems = insert_count * 2;
           int32_t insert_pos = i_pts + (j + 1) * 2;
           int32_t tail_len = buf_len - insert_pos;
@@ -368,8 +384,11 @@ int32_t concat_polygons(int32_t *buf, int32_t buf_len) {
                   (size_t)tail_len * sizeof(int32_t));
           buf_len += insert_elems;
 
-          /* JS splice order: first k[l+1..end-1], then k[1..l]
-             Both splice at j+1, so k[l+1..end-1] ends up after k[1..l]. */
+          /* Update offsets: shift entries after i */
+          for (int32_t n = i + 1; n < num_polys; n++)
+            offsets[n] += insert_elems;
+
+          /* JS splice order: k[l+1..end-1] then k[1..l] */
           int32_t wp = insert_pos;
           for (int32_t m = l + 1; m < k_pc; m++) {
             buf[wp++] = k_copy[1 + m * 2];
@@ -394,5 +413,6 @@ int32_t concat_polygons(int32_t *buf, int32_t buf_len) {
     }
   }
 
+  free(offsets);
   return buf_len;
 }

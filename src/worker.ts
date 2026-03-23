@@ -164,14 +164,14 @@ export function toSVGPath(
     if (bufLen < 0) throw new Error("wasm build_polygons failed");
     if (perf) perf.marks["buildPolygons"] = performance.now();
 
-    /* Read flat buffer and convert to JS polygon arrays */
-    const flatBuf = new Int32Array(bufLen);
-    flatBuf.set(wasmModule.HEAP32.subarray(outPtr / 4, outPtr / 4 + bufLen));
-    const polygons = parseFlatPolygons(flatBuf, bufLen);
-
-    /* concat and SVG generation remain in JS */
-    concatPolygons(polygons);
+    const finalLen = wasmConcatPolygons(outPtr, bufLen);
+    if (finalLen < 0) throw new Error("wasm concat_polygons failed");
     if (perf) perf.marks["concatPolygons"] = performance.now();
+
+    /* Read flat buffer and convert to JS polygon arrays for SVG generation */
+    const flatBuf = new Int32Array(finalLen);
+    flatBuf.set(wasmModule.HEAP32.subarray(outPtr / 4, outPtr / 4 + finalLen));
+    const polygons = parseFlatPolygons(flatBuf, finalLen);
 
     const d = generateSVGPathData(polygons);
     if (perf) {
