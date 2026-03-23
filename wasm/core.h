@@ -31,12 +31,12 @@ int32_t build_polygons(const int32_t *edges, int32_t edge_count, int32_t *out,
    Returns: new buf_len after merging, or negative on error. */
 int32_t concat_polygons(int32_t *buf, int32_t buf_len, int32_t buf_capacity);
 
-/* Decompose rectilinear polygons into rectangles.
-   Input: polygon flat buffer [point_count, x0,y0, x1,y1, ...]
-   Output: rectangle flat buffer [x, y, w, h, ...].
+/* Build rectangles from pixel coordinates using greedy row-run + vertical
+   extension. coords: flat [x0, y0, x1, y1, ...] pairs, count entries.
+   Output format: [x, y, w, h, ...].
    Returns: total int32 elements written, or negative on error. */
-int32_t rect_decompose(const int32_t *polys, int32_t polys_len, int32_t *out,
-                       int32_t out_capacity);
+int32_t build_rectangles(const int32_t *coords, int32_t count, int32_t width,
+                         int32_t height, int32_t *out, int32_t out_capacity);
 
 /* Result for one color from process_image. */
 typedef struct {
