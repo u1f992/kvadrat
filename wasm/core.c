@@ -518,7 +518,13 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
 
   /* Pass 1: Count pixels per color using hash table.
      key = rgba packed as uint64_t, value = count. */
-  int32_t color_cap = num_pixels < 1024 ? 2048 : num_pixels;
+  /* Load factor ~50% to avoid linear probing degradation and infinite loops.
+     Use int64 to avoid overflow on large images. */
+  int64_t color_cap_64 =
+      num_pixels < 1024 ? 2048 : (int64_t)num_pixels * 2;
+  if (color_cap_64 > INT32_MAX)
+    return CORE_ERROR_CAPACITY;
+  int32_t color_cap = (int32_t)color_cap_64;
   HashEntry *color_table =
       (HashEntry *)calloc((size_t)color_cap, sizeof(HashEntry));
   if (!color_table)

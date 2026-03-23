@@ -1,5 +1,7 @@
+#include <emscripten.h>
 #include <emscripten/bind.h>
 #include <emscripten/val.h>
+#include <climits>
 #include <vector>
 
 #include "core.h"
@@ -7,13 +9,15 @@
 using emscripten::val;
 
 val processImage(val pixelsVal, int32_t width, int32_t height) {
+  if (width <= 0 || height <= 0 ||
+      (int64_t)width * height > INT32_MAX) {
+    return val(CORE_ERROR_CAPACITY);
+  }
+
   std::vector<uint8_t> pixels =
       emscripten::convertJSArrayToNumberVector<uint8_t>(pixelsVal);
 
-  /* Allocate result array with generous capacity */
-  int32_t maxColors = width * height; /* theoretical max */
-  if (maxColors > 65536)
-    maxColors = 65536; /* practical limit */
+  int32_t maxColors = width * height;
   std::vector<ColorResult> results(maxColors);
 
   int32_t numColors =
@@ -22,7 +26,6 @@ val processImage(val pixelsVal, int32_t width, int32_t height) {
     return val(numColors);
   }
 
-  /* Build JS array of { rgba, polygons } */
   val jsResults = val::array();
   for (int32_t i = 0; i < numColors; i++) {
     val entry = val::object();
