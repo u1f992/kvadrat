@@ -31,7 +31,7 @@ model name	: Intel(R) Core(TM) Ultra 7 155U
 
 $ time node dist/cli.js --input test/input.png --output test/output.svg
 
-real	0m0.74s
-user	0m2.05s
-sys	0m0.27s
+real	0m0.75s
+user	0m1.85s
+sys	0m0.25s
 ```
