@@ -8,6 +8,8 @@ EMFLAGS := \
 	-s MODULARIZE=1 \
 	-s EXPORT_ES6=1 \
 	-s ALLOW_MEMORY_GROWTH=1 \
+	-pthread \
+	-s PTHREAD_POOL_SIZE=navigator.hardwareConcurrency \
 	-O2
 
 all: $(OUT_DIR)/core.js
