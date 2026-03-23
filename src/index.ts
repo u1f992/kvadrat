@@ -1,13 +1,14 @@
 import { performance } from "node:perf_hooks";
-import { intToRGBA } from "jimp";
-import { ColorHex, colorHex } from "./color-hex.js";
-import { toSVGPath, collectPerf, PERF_SYMBOL, WorkerPerf } from "./worker.js";
-import { submitTask, TaskResult } from "./worker-pool.js";
+import { Jimp } from "jimp";
+// @ts-ignore -- Emscripten-generated module, no .d.ts
+import createModule from "./wasm/core.js";
+
+const wasmModule = await createModule();
 
 type JimpImage = {
   width: number;
   height: number;
-  getPixelColor: (x: number, y: number) => number;
+  bitmap: { data: Buffer | Uint8Array | Uint8ClampedArray | number[] };
 };
 
 export type PerfResult = {
@@ -16,115 +17,82 @@ export type PerfResult = {
   total: number;
   colorCount: number;
   edgeCount: number;
-  workerPerfs: WorkerPerf[];
+  workerPerfs: never[];
 };
 
-// Edge count threshold: colors with fewer edges are processed on the main
-// thread to avoid worker dispatch overhead, which exceeds processing time
-// for small inputs.
-const WORKER_EDGE_THRESHOLD = 10000;
+function rgbaToHex(rgba: number): string {
+  return (
+    "#" +
+    ((rgba >>> 24) & 0xff).toString(16).padStart(2, "0") +
+    ((rgba >>> 16) & 0xff).toString(16).padStart(2, "0") +
+    ((rgba >>> 8) & 0xff).toString(16).padStart(2, "0") +
+    (rgba & 0xff).toString(16).padStart(2, "0")
+  );
+}
 
-type EdgeEntry = [ColorHex, Int32Array] | null;
-
-function buildEdges(image: JimpImage): {
-  entries: EdgeEntry[];
-  totalEdges: number;
-} {
-  // Pass 1: Count pixels per color
-  const pixelCount = new Map<ColorHex, number>();
-  for (let x = 0; x < image.width; x++) {
-    for (let y = 0; y < image.height; y++) {
-      const hex = colorHex(intToRGBA(image.getPixelColor(x, y)));
-      pixelCount.set(hex, (pixelCount.get(hex) ?? 0) + 1);
+function parseFlatPolygons(buf: Int32Array): [number, number][][] {
+  const polygons: [number, number][][] = [];
+  let pos = 0;
+  while (pos < buf.length) {
+    const pc = buf[pos]!;
+    pos++;
+    const polygon: [number, number][] = [];
+    for (let i = 0; i < pc; i++) {
+      polygon.push([buf[pos + i * 2]!, buf[pos + i * 2 + 1]!]);
     }
+    pos += pc * 2;
+    polygons.push(polygon);
   }
+  return polygons;
+}
 
-  // Allocate Int32Arrays: 4 edges per pixel, 4 ints per edge = 16 ints per pixel
-  const edgesOf = new Map<ColorHex, Int32Array>();
-  const offsets = new Map<ColorHex, number>();
-  for (const [hex, count] of pixelCount) {
-    edgesOf.set(hex, new Int32Array(count * 16));
-    offsets.set(hex, 0);
-  }
+function generateSVGPathData(polygons: [number, number][][]): string {
+  return polygons
+    .map(
+      (polygon) =>
+        "M" +
+        polygon[0]![0] +
+        "," +
+        polygon[0]![1] +
+        polygon
+          .slice(1)
+          .map((point, j) =>
+            point[0] === polygon[j]![0]
+              ? "v" + (point[1] - polygon[j]![1])
+              : "h" + (point[0] - polygon[j]![0]),
+          )
+          .join("") +
+        "z",
+    )
+    .join("");
+}
 
-  // Pass 2: Fill edge data
-  for (let x = 0; x < image.width; x++) {
-    for (let y = 0; y < image.height; y++) {
-      const hex = colorHex(intToRGBA(image.getPixelColor(x, y)));
-      const buf = edgesOf.get(hex)!;
-      let off = offsets.get(hex)!;
-      // prettier-ignore
-      buf[off++] = x;
-      buf[off++] = y;
-      buf[off++] = x + 1;
-      buf[off++] = y;
-      // prettier-ignore
-      buf[off++] = x + 1;
-      buf[off++] = y;
-      buf[off++] = x + 1;
-      buf[off++] = y + 1;
-      // prettier-ignore
-      buf[off++] = x + 1;
-      buf[off++] = y + 1;
-      buf[off++] = x;
-      buf[off++] = y + 1;
-      // prettier-ignore
-      buf[off++] = x;
-      buf[off++] = y + 1;
-      buf[off++] = x;
-      buf[off++] = y;
-      offsets.set(hex, off);
-    }
-  }
-
-  let totalEdges = 0;
-  for (const count of pixelCount.values()) {
-    totalEdges += count * 4;
-  }
-
-  return {
-    entries: [...edgesOf.entries()] as EdgeEntry[],
-    totalEdges,
-  };
+function normalizePixels(
+  data: Buffer | Uint8Array | Uint8ClampedArray | number[],
+): Uint8Array {
+  if (data instanceof Uint8Array) return data;
+  return new Uint8Array(data);
 }
 
 export async function toSVG(image: JimpImage) {
-  const { entries, totalEdges } = buildEdges(image);
+  const pixels = normalizePixels(image.bitmap.data);
 
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${image.width}" height="${image.height}" viewBox="0 0 ${image.width} ${image.height}">`;
 
-  // Phase 1: Submit heavy colors to worker pool
-  const workerSlots: { index: number; promise: Promise<TaskResult> }[] = [];
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
-    if (!entry) continue;
-    const [hex, edges] = entry;
-    const edgeCount = edges.length / 4;
-    if (edgeCount > WORKER_EDGE_THRESHOLD) {
-      workerSlots.push({
-        index: i,
-        promise: submitTask(hex, edges, edgeCount, false),
-      });
-      entries[i] = null; // buffer transferred, prevent accidental access
-    }
+  const results: { rgba: number; polygons: Int32Array }[] =
+    wasmModule.processImage(pixels, image.width, image.height);
+
+  if (typeof results === "number" && results < 0) {
+    throw new Error(`wasm processImage failed: ${results}`);
   }
 
-  // Phase 2: Process lightweight colors on main thread while workers run
-  const svgParts: (string | null)[] = new Array(entries.length).fill(null);
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
-    if (!entry) continue;
-    const [hex, edges] = entry;
-    svgParts[i] = toSVGPath(hex, edges, edges.length / 4);
+  for (const { rgba, polygons } of results) {
+    const hex = rgbaToHex(rgba);
+    const polys = parseFlatPolygons(polygons);
+    const d = generateSVGPathData(polys);
+    svg += `<path stroke="none" fill="${hex}" d="${d}"/>`;
   }
 
-  // Phase 3: Await worker results
-  const workerResults = await Promise.all(workerSlots.map((s) => s.promise));
-  for (let j = 0; j < workerSlots.length; j++) {
-    svgParts[workerSlots[j]!.index] = workerResults[j]!.svg;
-  }
-
-  svg += svgParts.filter(Boolean).join("");
   svg += "</svg>";
   return svg;
 }
@@ -134,69 +102,42 @@ export async function toSVGWithPerf(
 ): Promise<{ svg: string; perf: PerfResult }> {
   const t0 = performance.now();
 
-  const { entries, totalEdges } = buildEdges(image);
-  const colorCount = entries.length;
+  const pixels = normalizePixels(image.bitmap.data);
 
-  const tEdges = performance.now();
+  const tPixels = performance.now();
 
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${image.width}" height="${image.height}" viewBox="0 0 ${image.width} ${image.height}">`;
 
-  // Phase 1: Submit heavy colors to worker pool with perf
-  const results: (TaskResult | null)[] = new Array(entries.length).fill(null);
-  const workerSlots: { index: number; promise: Promise<TaskResult> }[] = [];
+  const results: { rgba: number; polygons: Int32Array }[] =
+    wasmModule.processImage(pixels, image.width, image.height);
 
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
-    if (!entry) continue;
-    const [hex, edges] = entry;
-    const edgeCount = edges.length / 4;
-    if (edgeCount > WORKER_EDGE_THRESHOLD) {
-      workerSlots.push({
-        index: i,
-        promise: submitTask(hex, edges, edgeCount, true),
-      });
-      entries[i] = null;
-    }
+  if (typeof results === "number" && results < 0) {
+    throw new Error(`wasm processImage failed: ${results}`);
   }
 
-  // Phase 2: Process lightweight colors on main thread with perf
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
-    if (!entry) continue;
-    const [hex, edges] = entry;
-    const edgeCount = edges.length / 4;
-    const { svg: pathSvg, perf } = collectPerf(hex, edges, edgeCount);
-    results[i] = { svg: pathSvg, [PERF_SYMBOL]: perf };
+  const tWasm = performance.now();
+
+  let edgeCount = 0;
+  for (const { rgba, polygons } of results) {
+    const hex = rgbaToHex(rgba);
+    const polys = parseFlatPolygons(polygons);
+    const d = generateSVGPathData(polys);
+    svg += `<path stroke="none" fill="${hex}" d="${d}"/>`;
   }
 
-  // Phase 3: Await worker results
-  const workerResults = await Promise.all(workerSlots.map((s) => s.promise));
-  for (let j = 0; j < workerSlots.length; j++) {
-    results[workerSlots[j]!.index] = workerResults[j]!;
-  }
-
-  svg += results
-    .filter(Boolean)
-    .map((r) => r!.svg)
-    .join("");
   svg += "</svg>";
 
   const tTotal = performance.now();
 
-  const workerPerfs: WorkerPerf[] = [];
-  for (const r of results) {
-    if (r && r[PERF_SYMBOL]) workerPerfs.push(r[PERF_SYMBOL]);
-  }
-
   return {
     svg,
     perf: {
-      buildEdges: tEdges - t0,
-      workers: tTotal - tEdges,
+      buildEdges: tPixels - t0,
+      workers: tWasm - tPixels,
       total: tTotal - t0,
-      colorCount,
-      edgeCount: totalEdges,
-      workerPerfs,
+      colorCount: results.length,
+      edgeCount,
+      workerPerfs: [],
     },
   };
 }
