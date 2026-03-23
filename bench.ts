@@ -1,5 +1,5 @@
 import { Jimp } from "jimp";
-import { toSVGWithPerf, PerfResult } from "./dist/index.js";
+import { toSVG, PerfResult } from "./dist/index.js";
 
 const RUNS = 10;
 const INPUT = process.argv[2] ?? "test/input.png";
@@ -28,7 +28,8 @@ async function main() {
   const allPerfs: PerfResult[] = [];
 
   for (let i = 0; i < RUNS; i++) {
-    const { perf } = await toSVGWithPerf(image);
+    const perf = {} as PerfResult;
+    await toSVG(image, { perf });
     allPerfs.push(perf);
     console.error(
       `  Run ${(i + 1).toString().padStart(2)}: ${fmt(perf.total)}`,
@@ -39,7 +40,7 @@ async function main() {
   console.error(`Overall (${allPerfs[0]!.colorCount} colors)`);
   console.error(`${"=".repeat(60)}`);
 
-  const phases = ["buildEdges", "workers", "total"] as const;
+  const phases = ["wasm", "render", "total"] as const;
   console.error(
     `${"Phase".padEnd(16)} ${"Mean".padStart(11)} ${"Median".padStart(11)}`,
   );

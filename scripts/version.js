@@ -13,6 +13,11 @@ try {
   suffix = `+${hash}`;
 }
 
+const dirty = execSync("git status --porcelain", { encoding: "utf-8" }).trim();
+if (dirty) {
+  suffix += ".dirty";
+}
+
 const full = version + suffix;
 writeFileSync("src/version.ts", `export const VERSION = '${full}'`, "utf-8");
 console.log(full);

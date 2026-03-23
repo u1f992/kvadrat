@@ -122,9 +122,7 @@
             mode === "rectangle"
               ? await toRectSVG(image)
               : await toSVG(image);
-          const img = document.createElement("img");
-          img.src = "data:image/svg+xml," + encodeURIComponent(svg);
-          result.appendChild(img);
+          result.innerHTML = svg;
         }
         } finally {
           runButton.disabled = false;

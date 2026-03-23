@@ -1,7 +1,13 @@
 // @ts-ignore -- Emscripten-generated module, no .d.ts
 import createModule from "./wasm/core.js";
 
-const wasmModule = await createModule();
+let wasmModule: Awaited<ReturnType<typeof createModule>>;
+async function getModule() {
+  if (!wasmModule) {
+    wasmModule = await createModule();
+  }
+  return wasmModule;
+}
 
 type JimpImage = {
   width: number;
@@ -10,8 +16,8 @@ type JimpImage = {
 };
 
 export type PerfResult = {
-  buildEdges: number;
-  workers: number;
+  wasm: number;
+  render: number;
   total: number;
   colorCount: number;
 };
@@ -46,17 +52,13 @@ function normalizePixels(
   return new Uint8Array(data);
 }
 
-function processImage(
+async function processImage(
   image: JimpImage,
   mode: number,
-): { rgba: number; polygons: Int32Array }[] {
+): Promise<{ rgba: number; polygons: Int32Array }[]> {
+  const wasm = await getModule();
   const pixels = normalizePixels(image.bitmap.data);
-  const results = wasmModule.processImage(
-    pixels,
-    image.width,
-    image.height,
-    mode,
-  );
+  const results = wasm.processImage(pixels, image.width, image.height, mode);
   if (typeof results === "number" && results < 0) {
     throw new Error(`wasm processImage failed: ${results}`);
   }
@@ -108,6 +110,7 @@ function generateSVGPathData(polygons: [number, number][][]): string {
 
 export type SVGOptions = {
   fillOpacity?: boolean;
+  perf?: PerfResult;
 };
 
 function svgFillAttrs(rgba: number, fillOpacity: boolean): string {
@@ -124,14 +127,23 @@ export async function toSVG(
   image: JimpImage,
   options: SVGOptions = {},
 ): Promise<string> {
-  const { fillOpacity = true } = options;
-  const results = processImage(image, 0);
+  const { fillOpacity = true, perf } = options;
+  const t0 = performance.now();
+  const results = await processImage(image, 0);
+  const tWasm = performance.now();
   let svg = svgHeader(image.width, image.height);
   for (const { rgba, polygons } of results) {
     const d = generateSVGPathData(parseFlatPolygons(polygons));
     svg += `<path stroke="none" ${svgFillAttrs(rgba, fillOpacity)} d="${d}"/>`;
   }
   svg += "</svg>";
+  if (perf) {
+    const tDone = performance.now();
+    perf.wasm = tWasm - t0;
+    perf.render = tDone - tWasm;
+    perf.total = tDone - t0;
+    perf.colorCount = results.length;
+  }
   return svg;
 }
 
@@ -158,7 +170,7 @@ function parseFlatRectangles(buf: Int32Array): Rect[] {
 }
 
 export async function toRectangles(image: JimpImage): Promise<RectResult[]> {
-  const results = processImage(image, 1);
+  const results = await processImage(image, 1);
   return results.map(({ rgba, polygons }) => ({
     color: rgbaToHex(rgba),
     rects: parseFlatRectangles(polygons),
@@ -170,7 +182,7 @@ export async function toRectSVG(
   options: SVGOptions = {},
 ): Promise<string> {
   const { fillOpacity = true } = options;
-  const results = processImage(image, 1);
+  const results = await processImage(image, 1);
   let svg = svgHeader(image.width, image.height);
   for (const { rgba, polygons } of results) {
     const rects = parseFlatRectangles(polygons);
@@ -212,39 +224,4 @@ export async function toCSSBackground(
   }
 
   return `${selector} {\n  width: ${image.width}px;\n  height: ${image.height}px;\n  background:\n    ${layers.join(",\n    ")};\n}\n`;
-}
-
-/* --- Perf --- */
-
-export async function toSVGWithPerf(
-  image: JimpImage,
-): Promise<{ svg: string; perf: PerfResult }> {
-  const t0 = performance.now();
-  const pixels = normalizePixels(image.bitmap.data);
-  const tPixels = performance.now();
-
-  const results: { rgba: number; polygons: Int32Array }[] =
-    wasmModule.processImage(pixels, image.width, image.height, 0);
-  if (typeof results === "number" && results < 0) {
-    throw new Error(`wasm processImage failed: ${results}`);
-  }
-  const tWasm = performance.now();
-
-  let svg = svgHeader(image.width, image.height);
-  for (const { rgba, polygons } of results) {
-    const d = generateSVGPathData(parseFlatPolygons(polygons));
-    svg += `<path stroke="none" fill="${rgbaToHex(rgba)}" d="${d}"/>`;
-  }
-  svg += "</svg>";
-  const tTotal = performance.now();
-
-  return {
-    svg,
-    perf: {
-      buildEdges: tPixels - t0,
-      workers: tWasm - tPixels,
-      total: tTotal - t0,
-      colorCount: results.length,
-    },
-  };
 }
