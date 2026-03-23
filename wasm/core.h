@@ -7,6 +7,10 @@
 #define CORE_ERROR_CAPACITY (-2)
 #define CORE_ERROR_BROKEN_CHAIN (-3)
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 int32_t remove_bidirectional_edges(int32_t *edges, int32_t edge_count);
 
 /* Build polygons from edges into a flat buffer.
@@ -19,5 +23,9 @@ int32_t build_polygons(const int32_t *edges, int32_t edge_count, int32_t *out,
    buf_len: number of valid int32 elements in buf.
    Returns: new buf_len after merging, or negative on error. */
 int32_t concat_polygons(int32_t *buf, int32_t buf_len);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

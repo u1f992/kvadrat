@@ -1,26 +1,26 @@
 OUT_DIR := ../src/wasm
-SOURCES := core.c
+C_SOURCES := core.c
+CPP_SOURCES := bindings.cpp
 HEADERS := core.h
 
-EMCC_FLAGS := \
+EMFLAGS := \
+	-lembind \
 	-s MODULARIZE=1 \
 	-s EXPORT_ES6=1 \
-	-s EXPORTED_FUNCTIONS='["_remove_bidirectional_edges","_build_polygons","_concat_polygons","_malloc","_free"]' \
-	-s EXPORTED_RUNTIME_METHODS='["cwrap","HEAP32"]' \
 	-s ALLOW_MEMORY_GROWTH=1 \
 	-O2
 
 all: $(OUT_DIR)/core.js
 
-$(OUT_DIR)/core.js: $(SOURCES) $(HEADERS)
+$(OUT_DIR)/core.js: $(C_SOURCES) $(CPP_SOURCES) $(HEADERS)
 	mkdir -p $(OUT_DIR)
-	emcc $(SOURCES) -o $@ $(EMCC_FLAGS)
+	em++ $(C_SOURCES) $(CPP_SOURCES) -o $@ $(EMFLAGS)
 
 format:
-	clang-format -i $(SOURCES) $(HEADERS)
+	clang-format -i $(C_SOURCES) $(CPP_SOURCES) $(HEADERS)
 
 tidy:
-	clang-tidy $(SOURCES) -- -I.
+	clang-tidy $(C_SOURCES) -- -I.
 
 clean:
 	rm -rf $(OUT_DIR)
