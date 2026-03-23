@@ -131,6 +131,12 @@
 
 ---
 
+## Step 2: concatPolygons Map化 — スキップ
+
+元のアルゴリズムは `j → k → l` の3重ループで、マッチ順序が `j` (外側ポリゴンの頂点インデックス) に依存する。Map化で最内ループ `l` を除去すると `j` の優先順序が変わり、ビット一致が保証できない。concatPolygons は現状最大70msであり、改善対コストが見合わないためスキップ。Wasm移植時にアルゴリズムごと書き直す。
+
+---
+
 ## Optimization Plan (Wasm migration aware)
 
 ### Before Wasm
