@@ -147,6 +147,25 @@ export async function toRectSVG(image: JimpImage): Promise<string> {
   return svg;
 }
 
+/* --- CSS background mode --- */
+
+export async function toCSSBackground(
+  image: JimpImage,
+  selector: string = ".image",
+): Promise<string> {
+  const results = await toRectangles(image);
+  const gradients: string[] = [];
+  for (const { color, rects } of results) {
+    for (const { x, y, w, h } of rects) {
+      gradients.push(
+        `linear-gradient(${color},${color}) ${x}px ${y}px / ${w}px ${h}px no-repeat`,
+      );
+    }
+  }
+
+  return `${selector} {\n  width: ${image.width}px;\n  height: ${image.height}px;\n  background:\n    ${gradients.join(",\n    ")};\n}\n`;
+}
+
 /* --- Perf --- */
 
 export async function toSVGWithPerf(
