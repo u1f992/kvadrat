@@ -22,7 +22,7 @@ int32_t build_polygons(const int32_t *edges, int32_t edge_count, int32_t *out,
 /* Merge touching polygons in-place in a flat buffer.
    buf_len: number of valid int32 elements in buf.
    Returns: new buf_len after merging, or negative on error. */
-int32_t concat_polygons(int32_t *buf, int32_t buf_len);
+int32_t concat_polygons(int32_t *buf, int32_t buf_len, int32_t buf_capacity);
 
 /* Result for one color from process_image. */
 typedef struct {

@@ -29,6 +29,8 @@ static uint64_t hash64(uint64_t key) {
 
 static int32_t hash_find(const HashEntry *table, int32_t capacity,
                          uint64_t key) {
+  if (capacity <= 0)
+    return -1;
   int32_t idx = (int32_t)(hash64(key) % (uint64_t)capacity);
   while (table[idx].occupied) {
     if (table[idx].key == key) {
@@ -41,6 +43,8 @@ static int32_t hash_find(const HashEntry *table, int32_t capacity,
 
 static int32_t hash_insert(HashEntry *table, int32_t capacity, uint64_t key,
                            int32_t value) {
+  if (capacity <= 0)
+    return -1;
   int32_t idx = (int32_t)(hash64(key) % (uint64_t)capacity);
   while (table[idx].occupied) {
     if (table[idx].key == key) {
@@ -55,6 +59,8 @@ static int32_t hash_insert(HashEntry *table, int32_t capacity, uint64_t key,
 }
 
 static void hash_remove(HashEntry *table, int32_t capacity, int32_t idx) {
+  if (capacity <= 0)
+    return;
   table[idx].occupied = 0;
 
   /* Rehash subsequent entries to maintain linear probing invariant */
@@ -314,7 +320,7 @@ static int32_t poly_count(const int32_t *buf, int32_t buf_len) {
   return count;
 }
 
-int32_t concat_polygons(int32_t *buf, int32_t buf_len) {
+int32_t concat_polygons(int32_t *buf, int32_t buf_len, int32_t buf_capacity) {
   int32_t num_polys = poly_count(buf, buf_len);
   if (num_polys <= 1)
     return buf_len;
@@ -380,6 +386,11 @@ int32_t concat_polygons(int32_t *buf, int32_t buf_len) {
           int32_t insert_pos = i_pts + (j + 1) * 2;
           int32_t tail_len = buf_len - insert_pos;
 
+          if (buf_len + insert_elems > buf_capacity) {
+            free(k_copy);
+            free(offsets);
+            return CORE_ERROR_CAPACITY;
+          }
           memmove(buf + insert_pos + insert_elems, buf + insert_pos,
                   (size_t)tail_len * sizeof(int32_t));
           buf_len += insert_elems;
@@ -422,9 +433,25 @@ static uint32_t rgba_key(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
   return ((uint32_t)r << 24) | ((uint32_t)g << 16) | ((uint32_t)b << 8) | a;
 }
 
+/* Cleanup helper for process_image error paths. */
+static inline void pipeline_error_cleanup(int32_t **edge_bufs,
+                                          int32_t first_edge,
+                                          int32_t num_colors,
+                                          ColorResult *out_results,
+                                          int32_t completed_colors,
+                                          int32_t *edge_offsets,
+                                          uint32_t *color_list) {
+  for (int32_t j = first_edge; j < num_colors; j++)
+    free(edge_bufs[j]);
+  for (int32_t j = 0; j < completed_colors; j++)
+    free(out_results[j].polygons);
+  free(edge_bufs);
+  free(edge_offsets);
+  free(color_list);
+}
+
 /* Hash table entry for color classification: key=rgba, value=pixel count or
    edge buffer index. We reuse the generic HashEntry with uint64_t key. */
-
 int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
                       ColorResult *out_results, int32_t out_capacity) {
   int32_t num_pixels = width * height;
@@ -548,22 +575,16 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
 
     int32_t new_ec = remove_bidirectional_edges(edges, edge_count);
     if (new_ec < 0) {
-      for (int32_t j = c; j < num_colors; j++)
-        free(edge_bufs[j]);
-      free(edge_bufs);
-      free(edge_offsets);
-      free(color_list);
+      pipeline_error_cleanup(edge_bufs, c, num_colors, out_results, c,
+                             edge_offsets, color_list);
       return new_ec;
     }
 
     int32_t out_cap = new_ec * 11;
     int32_t *poly_buf = (int32_t *)malloc((size_t)out_cap * sizeof(int32_t));
     if (!poly_buf) {
-      for (int32_t j = c; j < num_colors; j++)
-        free(edge_bufs[j]);
-      free(edge_bufs);
-      free(edge_offsets);
-      free(color_list);
+      pipeline_error_cleanup(edge_bufs, c, num_colors, out_results, c,
+                             edge_offsets, color_list);
       return CORE_ERROR_ALLOC;
     }
 
@@ -573,22 +594,16 @@ int32_t process_image(const uint8_t *pixels, int32_t width, int32_t height,
 
     if (buf_len < 0) {
       free(poly_buf);
-      for (int32_t j = c + 1; j < num_colors; j++)
-        free(edge_bufs[j]);
-      free(edge_bufs);
-      free(edge_offsets);
-      free(color_list);
+      pipeline_error_cleanup(edge_bufs, c + 1, num_colors, out_results, c,
+                             edge_offsets, color_list);
       return buf_len;
     }
 
-    int32_t final_len = concat_polygons(poly_buf, buf_len);
+    int32_t final_len = concat_polygons(poly_buf, buf_len, out_cap);
     if (final_len < 0) {
       free(poly_buf);
-      for (int32_t j = c + 1; j < num_colors; j++)
-        free(edge_bufs[j]);
-      free(edge_bufs);
-      free(edge_offsets);
-      free(color_list);
+      pipeline_error_cleanup(edge_bufs, c + 1, num_colors, out_results, c,
+                             edge_offsets, color_list);
       return final_len;
     }
 

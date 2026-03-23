@@ -1,5 +1,4 @@
 import { performance } from "node:perf_hooks";
-import { Jimp } from "jimp";
 // @ts-ignore -- Emscripten-generated module, no .d.ts
 import createModule from "./wasm/core.js";
 
@@ -16,8 +15,6 @@ export type PerfResult = {
   workers: number;
   total: number;
   colorCount: number;
-  edgeCount: number;
-  workerPerfs: never[];
 };
 
 function rgbaToHex(rgba: number): string {
@@ -117,7 +114,6 @@ export async function toSVGWithPerf(
 
   const tWasm = performance.now();
 
-  let edgeCount = 0;
   for (const { rgba, polygons } of results) {
     const hex = rgbaToHex(rgba);
     const polys = parseFlatPolygons(polygons);
@@ -136,8 +132,6 @@ export async function toSVGWithPerf(
       workers: tWasm - tPixels,
       total: tTotal - t0,
       colorCount: results.length,
-      edgeCount,
-      workerPerfs: [],
     },
   };
 }
