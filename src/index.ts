@@ -1,8 +1,8 @@
 import { performance } from "node:perf_hooks";
 import { intToRGBA } from "jimp";
 import { ColorHex, colorHex } from "./color-hex.js";
-import { toSVGPathWithPerf, WorkerPerf } from "./worker.js";
-import { submitTask } from "./worker-pool.js";
+import { toSVGPath, collectPerf, PERF_SYMBOL, WorkerPerf } from "./worker.js";
+import { submitTask, TaskResult } from "./worker-pool.js";
 
 type JimpImage = {
   width: number;
@@ -19,18 +19,17 @@ export type PerfResult = {
   workerPerfs: WorkerPerf[];
 };
 
-export async function toSVG(image: JimpImage) {
-  const { svg } = await toSVGWithPerf(image);
-  return svg;
-}
+// Edge count threshold: colors with fewer edges are processed on the main
+// thread to avoid worker dispatch overhead, which exceeds processing time
+// for small inputs.
+const WORKER_EDGE_THRESHOLD = 10000;
 
-export async function toSVGWithPerf(
-  image: JimpImage,
-): Promise<{ svg: string; perf: PerfResult }> {
-  const t0 = performance.now();
+type EdgeEntry = [ColorHex, Int32Array] | null;
 
-  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${image.width}" height="${image.height}" viewBox="0 0 ${image.width} ${image.height}">`;
-
+function buildEdges(image: JimpImage): {
+  entries: EdgeEntry[];
+  totalEdges: number;
+} {
   // Pass 1: Count pixels per color
   const pixelCount = new Map<ColorHex, number>();
   for (let x = 0; x < image.width; x++) {
@@ -78,54 +77,116 @@ export async function toSVGWithPerf(
     }
   }
 
-  const tEdges = performance.now();
-
   let totalEdges = 0;
   for (const count of pixelCount.values()) {
     totalEdges += count * 4;
   }
 
-  // Phase 1: Submit heavy colors to worker pool first so they run in parallel
-  const WORKER_EDGE_THRESHOLD = 10000;
-  const entries = [...edgesOf.entries()];
-  const results: ({ svg: string; perf: WorkerPerf } | null)[] = new Array(
-    entries.length,
-  ).fill(null);
-  const workerSlots: {
-    index: number;
-    promise: Promise<{ svg: string; perf: WorkerPerf }>;
-  }[] = [];
+  return {
+    entries: [...edgesOf.entries()] as EdgeEntry[],
+    totalEdges,
+  };
+}
+
+export async function toSVG(image: JimpImage) {
+  const { entries, totalEdges } = buildEdges(image);
+
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${image.width}" height="${image.height}" viewBox="0 0 ${image.width} ${image.height}">`;
+
+  // Phase 1: Submit heavy colors to worker pool
+  const workerSlots: { index: number; promise: Promise<TaskResult> }[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (!entry) continue;
+    const [hex, edges] = entry;
+    const edgeCount = edges.length / 4;
+    if (edgeCount > WORKER_EDGE_THRESHOLD) {
+      workerSlots.push({
+        index: i,
+        promise: submitTask(hex, edges, edgeCount, false),
+      });
+      entries[i] = null; // buffer transferred, prevent accidental access
+    }
+  }
+
+  // Phase 2: Process lightweight colors on main thread while workers run
+  const svgParts: (string | null)[] = new Array(entries.length).fill(null);
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (!entry) continue;
+    const [hex, edges] = entry;
+    svgParts[i] = toSVGPath(hex, edges, edges.length / 4);
+  }
+
+  // Phase 3: Await worker results
+  const workerResults = await Promise.all(workerSlots.map((s) => s.promise));
+  for (let j = 0; j < workerSlots.length; j++) {
+    svgParts[workerSlots[j]!.index] = workerResults[j]!.svg;
+  }
+
+  svg += svgParts.filter(Boolean).join("");
+  svg += "</svg>";
+  return svg;
+}
+
+export async function toSVGWithPerf(
+  image: JimpImage,
+): Promise<{ svg: string; perf: PerfResult }> {
+  const t0 = performance.now();
+
+  const { entries, totalEdges } = buildEdges(image);
+  const colorCount = entries.length;
+
+  const tEdges = performance.now();
+
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${image.width}" height="${image.height}" viewBox="0 0 ${image.width} ${image.height}">`;
+
+  // Phase 1: Submit heavy colors to worker pool with perf
+  const results: (TaskResult | null)[] = new Array(entries.length).fill(null);
+  const workerSlots: { index: number; promise: Promise<TaskResult> }[] = [];
 
   for (let i = 0; i < entries.length; i++) {
-    const [hex, edges] = entries[i]!;
+    const entry = entries[i];
+    if (!entry) continue;
+    const [hex, edges] = entry;
     const edgeCount = edges.length / 4;
     if (edgeCount > WORKER_EDGE_THRESHOLD) {
       workerSlots.push({
         index: i,
         promise: submitTask(hex, edges, edgeCount, true),
       });
+      entries[i] = null;
     }
   }
 
-  // Phase 2: Process lightweight colors on main thread while workers run
+  // Phase 2: Process lightweight colors on main thread with perf
   for (let i = 0; i < entries.length; i++) {
-    const [hex, edges] = entries[i]!;
+    const entry = entries[i];
+    if (!entry) continue;
+    const [hex, edges] = entry;
     const edgeCount = edges.length / 4;
-    if (edgeCount <= WORKER_EDGE_THRESHOLD) {
-      results[i] = toSVGPathWithPerf(hex, edges, edgeCount);
-    }
+    const { svg: pathSvg, perf } = collectPerf(hex, edges, edgeCount);
+    results[i] = { svg: pathSvg, [PERF_SYMBOL]: perf };
   }
 
-  // Phase 3: Await worker results and fill remaining slots
+  // Phase 3: Await worker results
   const workerResults = await Promise.all(workerSlots.map((s) => s.promise));
   for (let j = 0; j < workerSlots.length; j++) {
     results[workerSlots[j]!.index] = workerResults[j]!;
   }
 
-  svg += results.map((r) => r!.svg).join("");
+  svg += results
+    .filter(Boolean)
+    .map((r) => r!.svg)
+    .join("");
   svg += "</svg>";
 
   const tTotal = performance.now();
+
+  const workerPerfs: WorkerPerf[] = [];
+  for (const r of results) {
+    if (r && r[PERF_SYMBOL]) workerPerfs.push(r[PERF_SYMBOL]);
+  }
 
   return {
     svg,
@@ -133,9 +194,9 @@ export async function toSVGWithPerf(
       buildEdges: tEdges - t0,
       workers: tTotal - tEdges,
       total: tTotal - t0,
-      colorCount: edgesOf.size,
+      colorCount,
       edgeCount: totalEdges,
-      workerPerfs: results.map((r) => r!.perf),
+      workerPerfs,
     },
   };
 }

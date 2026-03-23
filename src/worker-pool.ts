@@ -2,12 +2,14 @@ import { Worker } from "node:worker_threads";
 import os from "node:os";
 import path from "node:path";
 import { ColorHex } from "./color-hex.js";
-import { WorkerPerf } from "./worker.js";
+import { PERF_SYMBOL, WorkerPerf } from "./worker.js";
 
 const WORKER_PATH = path.join(import.meta.dirname, "worker.js");
 const POOL_SIZE = os.cpus().length;
 
-type TaskResult = { svg: string; perf: WorkerPerf };
+export type TaskResult = { svg: string; [PERF_SYMBOL]?: WorkerPerf };
+
+type WorkerMessage = { svg: string; perf?: WorkerPerf };
 
 type PendingTask = {
   hex: ColorHex;
@@ -21,14 +23,22 @@ type PendingTask = {
 let workers: Worker[] = [];
 let idle: Worker[] = [];
 const queue: PendingTask[] = [];
+const inflight = new Map<Worker, PendingTask>();
 
 function ensurePool() {
   if (workers.length > 0) return;
-  for (let i = 0; i < POOL_SIZE; i++) {
-    const w = new Worker(WORKER_PATH);
-    w.unref();
-    workers.push(w);
-    idle.push(w);
+  try {
+    for (let i = 0; i < POOL_SIZE; i++) {
+      const w = new Worker(WORKER_PATH);
+      w.unref();
+      workers.push(w);
+      idle.push(w);
+    }
+  } catch (err) {
+    for (const w of workers) w.terminate();
+    workers = [];
+    idle = [];
+    throw err;
   }
 }
 
@@ -37,21 +47,33 @@ function dispatch() {
     const worker = idle.pop()!;
     const task = queue.shift()!;
 
-    const onMessage = (result: TaskResult) => {
+    inflight.set(worker, task);
+
+    const onMessage = (raw: WorkerMessage) => {
       worker.removeListener("error", onError);
+      inflight.delete(worker);
+      const result: TaskResult = { svg: raw.svg };
+      if (raw.perf) result[PERF_SYMBOL] = raw.perf;
       task.resolve(result);
       idle.push(worker);
       dispatch();
     };
     const onError = (err: unknown) => {
       worker.removeListener("message", onMessage);
+      inflight.delete(worker);
+      worker.terminate();
       task.reject(err);
-      // Replace dead worker
       const idx = workers.indexOf(worker);
-      const replacement = new Worker(WORKER_PATH);
-      replacement.unref();
-      workers[idx] = replacement;
-      idle.push(replacement);
+      if (idx === -1) return; // Pool already destroyed
+      try {
+        const replacement = new Worker(WORKER_PATH);
+        replacement.unref();
+        workers[idx] = replacement;
+        idle.push(replacement);
+      } catch {
+        // Remove dead slot; pool operates at reduced capacity
+        workers.splice(idx, 1);
+      }
       dispatch();
     };
 
@@ -83,8 +105,16 @@ export function submitTask(
 }
 
 export function destroyPool() {
+  for (const task of queue) {
+    task.reject(new Error("worker pool destroyed"));
+  }
+  queue.length = 0;
+  for (const [worker, task] of inflight) {
+    worker.removeAllListeners();
+    task.reject(new Error("worker pool destroyed"));
+  }
+  inflight.clear();
   for (const w of workers) w.terminate();
   workers = [];
   idle = [];
-  queue.length = 0;
 }

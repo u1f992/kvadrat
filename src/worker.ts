@@ -1,6 +1,8 @@
-import { parentPort, workerData, isMainThread } from "node:worker_threads";
+import { parentPort, isMainThread } from "node:worker_threads";
 import { performance } from "node:perf_hooks";
 import { ColorHex } from "./color-hex.js";
+
+export const PERF_SYMBOL: unique symbol = Symbol("perf");
 
 const pointEquals = (a: [number, number], b: [number, number]) =>
   a[0] === b[0] && a[1] === b[1];
@@ -210,42 +212,53 @@ export type WorkerPerf = {
   total: number;
 };
 
-export function toSVGPathWithPerf(
+export type PerfContext = {
+  marks: Record<string, number>;
+  polygonCount: number;
+};
+
+export function toSVGPath(
+  hex: ColorHex,
+  edges: Int32Array,
+  edgeCount: number,
+  perf?: PerfContext,
+): string {
+  if (perf) perf.marks["start"] = performance.now();
+  edgeCount = removeBidirectionalEdges(edges, edgeCount);
+  if (perf) perf.marks["removeEdges"] = performance.now();
+  const polygons = buildPolygons(edges, edgeCount);
+  if (perf) perf.marks["buildPolygons"] = performance.now();
+  concatPolygons(polygons);
+  if (perf) perf.marks["concatPolygons"] = performance.now();
+  const d = generateSVGPathData(polygons);
+  if (perf) {
+    perf.marks["generateSVG"] = performance.now();
+    perf.polygonCount = polygons.length;
+  }
+  return `<path stroke="none" fill="${hex}" d="${d}"/>`;
+}
+
+export function collectPerf(
   hex: ColorHex,
   edges: Int32Array,
   edgeCount: number,
 ): { svg: string; perf: WorkerPerf } {
-  const t0 = performance.now();
-
-  edgeCount = removeBidirectionalEdges(edges, edgeCount);
-  const t1 = performance.now();
-
-  const polygons = buildPolygons(edges, edgeCount);
-  const t2 = performance.now();
-
-  concatPolygons(polygons);
-  const t3 = performance.now();
-
-  const d = generateSVGPathData(polygons);
-  const t4 = performance.now();
-
+  const ctx: PerfContext = { marks: {}, polygonCount: 0 };
+  const svg = toSVGPath(hex, edges, edgeCount, ctx);
+  const m = ctx.marks;
   return {
-    svg: `<path stroke="none" fill="${hex}" d="${d}"/>`,
+    svg,
     perf: {
       hex,
       edges: edgeCount,
-      polygons: polygons.length,
-      removeEdges: t1 - t0,
-      buildPolygons: t2 - t1,
-      concatPolygons: t3 - t2,
-      generateSVG: t4 - t3,
-      total: t4 - t0,
+      polygons: ctx.polygonCount,
+      removeEdges: m["removeEdges"]! - m["start"]!,
+      buildPolygons: m["buildPolygons"]! - m["removeEdges"]!,
+      concatPolygons: m["concatPolygons"]! - m["buildPolygons"]!,
+      generateSVG: m["generateSVG"]! - m["concatPolygons"]!,
+      total: m["generateSVG"]! - m["start"]!,
     },
   };
-}
-
-export function toSVGPath(hex: ColorHex, edges: Int32Array, edgeCount: number) {
-  return toSVGPathWithPerf(hex, edges, edgeCount).svg;
 }
 
 if (!isMainThread) {
@@ -258,10 +271,10 @@ if (!isMainThread) {
       returnPerf: boolean;
     }) => {
       if (msg.returnPerf) {
-        const result = toSVGPathWithPerf(msg.hex, msg.edges, msg.edgeCount);
-        parentPort!.postMessage(result);
+        parentPort!.postMessage(collectPerf(msg.hex, msg.edges, msg.edgeCount));
       } else {
-        parentPort!.postMessage(toSVGPath(msg.hex, msg.edges, msg.edgeCount));
+        const svg = toSVGPath(msg.hex, msg.edges, msg.edgeCount);
+        parentPort!.postMessage({ svg });
       }
     },
   );
