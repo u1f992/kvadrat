@@ -12,6 +12,7 @@ const {
   output,
   mode,
   "css-selector": cssSelector,
+  rgba,
   version,
   help,
 } = parseArgs({
@@ -20,6 +21,7 @@ const {
     output: { type: "string", short: "o" },
     mode: { type: "string", short: "m", default: "polygon" },
     "css-selector": { type: "string", default: ".image" },
+    rgba: { type: "boolean", default: false },
     version: { type: "boolean", short: "v" },
     help: { type: "boolean", short: "h" },
   },
@@ -38,6 +40,7 @@ Options:
   -o, --output <file>       output file (.svg or .css)
   -m, --mode <mode>         polygon (default), rectangle, or css-background
   --css-selector <sel>      CSS selector (default: .image)
+  --rgba                    use #RRGGBBAA instead of fill-opacity attribute
   -v, --version             output the version number
   -h, --help                display help for command`,
   );
@@ -76,8 +79,11 @@ if (mode === "css-background") {
     process.stdout.write(css);
   }
 } else {
+  const svgOptions = { fillOpacity: !rgba };
   const svg =
-    mode === "rectangle" ? await toRectSVG(image) : await toSVG(image);
+    mode === "rectangle"
+      ? await toRectSVG(image, svgOptions)
+      : await toSVG(image, svgOptions);
   if (output) {
     fs.writeFileSync(output, svg, { encoding: "utf-8" });
   } else {

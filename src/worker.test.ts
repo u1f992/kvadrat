@@ -27,7 +27,7 @@ describe("toSVG end-to-end", () => {
   test("single red pixel", async () => {
     const img = makeImage(1, 1, [[255, 0, 0, 255]]);
     const svg = await toSVG(img as any);
-    assert.match(svg, /fill="#ff0000ff"/);
+    assert.match(svg, /fill="#ff0000"/);
     assert.match(svg, /d="M0,0h1v1h-1v-1z"/);
   });
 
@@ -46,8 +46,8 @@ describe("toSVG end-to-end", () => {
       [0, 255, 0, 255],
     ]);
     const svg = await toSVG(img as any);
-    assert.match(svg, /fill="#ff0000ff"/);
-    assert.match(svg, /fill="#00ff00ff"/);
+    assert.match(svg, /fill="#ff0000"/);
+    assert.match(svg, /fill="#00ff00"/);
   });
 
   test("2x2 single color produces square", async () => {
@@ -72,7 +72,7 @@ describe("toSVG end-to-end", () => {
     ]);
     const svg = await toSVG(img as any);
     // L-shape has 7 points = 6 segments + z
-    const redPath = svg.match(/fill="#ff0000ff" d="([^"]+)"/)?.[1] ?? "";
+    const redPath = svg.match(/fill="#ff0000" d="([^"]+)"/)?.[1] ?? "";
     const segments = redPath.match(/[Mhvz]/g) ?? [];
     assert.equal(segments.length, 8); // M + 6 segments + z
   });
@@ -83,8 +83,8 @@ describe("toSVG end-to-end", () => {
       [255, 0, 0, 0],
     ]);
     const svg = await toSVG(img as any);
-    assert.match(svg, /fill="#ff000080"/);
-    assert.match(svg, /fill="#ff000000"/);
+    assert.match(svg, /fill="#ff0000" fill-opacity="/);
+    assert.ok(svg.includes('fill-opacity="0"'));
   });
 
   test("3x3 checkerboard: diagonal-touching pixels merged into single path per color", async () => {
@@ -94,12 +94,12 @@ describe("toSVG end-to-end", () => {
     const svg = await toSVG(img as any);
     assert.ok(
       svg.includes(
-        'fill="#000000ff" d="M0,0h1v1h1v-1h1v1h-1v1h1v1h-1v-1h-1v1h-1v-1h1v-1h-1v-1z"',
+        'fill="#000000" d="M0,0h1v1h1v-1h1v1h-1v1h1v1h-1v-1h-1v1h-1v-1h1v-1h-1v-1z"',
       ),
     );
     assert.ok(
       svg.includes(
-        'fill="#ffffffff" d="M1,0h1v1h1v1h-1v1h-1v-1h1v-1h-1v1h-1v-1h1v-1z"',
+        'fill="#ffffff" d="M1,0h1v1h1v1h-1v1h-1v-1h1v-1h-1v1h-1v-1h1v-1z"',
       ),
     );
   });
@@ -108,14 +108,14 @@ describe("toSVG end-to-end", () => {
     const data = new Uint8ClampedArray([255, 0, 0, 255]);
     const img = { width: 1, height: 1, bitmap: { data } };
     const svg = await toSVG(img as any);
-    assert.match(svg, /fill="#ff0000ff"/);
+    assert.match(svg, /fill="#ff0000"/);
   });
 
   test("number[] input works", async () => {
     const data = [255, 0, 0, 255];
     const img = { width: 1, height: 1, bitmap: { data } };
     const svg = await toSVG(img as any);
-    assert.match(svg, /fill="#ff0000ff"/);
+    assert.match(svg, /fill="#ff0000"/);
   });
 });
 

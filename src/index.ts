@@ -27,6 +27,19 @@ function rgbaToHex(rgba: number): string {
   );
 }
 
+function rgbaToRgb(rgba: number): string {
+  return (
+    "#" +
+    ((rgba >>> 24) & 0xff).toString(16).padStart(2, "0") +
+    ((rgba >>> 16) & 0xff).toString(16).padStart(2, "0") +
+    ((rgba >>> 8) & 0xff).toString(16).padStart(2, "0")
+  );
+}
+
+function rgbaToOpacity(rgba: number): number {
+  return (rgba & 0xff) / 255;
+}
+
 function normalizePixels(
   data: Buffer | Uint8Array | Uint8ClampedArray | number[],
 ): Uint8Array {
@@ -94,12 +107,30 @@ function generateSVGPathData(polygons: [number, number][][]): string {
     .join("");
 }
 
-export async function toSVG(image: JimpImage): Promise<string> {
+export type SVGOptions = {
+  fillOpacity?: boolean;
+};
+
+function svgFillAttrs(rgba: number, fillOpacity: boolean): string {
+  if (fillOpacity) {
+    const opacity = rgbaToOpacity(rgba);
+    return opacity === 1
+      ? `fill="${rgbaToRgb(rgba)}"`
+      : `fill="${rgbaToRgb(rgba)}" fill-opacity="${opacity}"`;
+  }
+  return `fill="${rgbaToHex(rgba)}"`;
+}
+
+export async function toSVG(
+  image: JimpImage,
+  options: SVGOptions = {},
+): Promise<string> {
+  const { fillOpacity = true } = options;
   const results = processImage(image, 0);
   let svg = svgHeader(image.width, image.height);
   for (const { rgba, polygons } of results) {
     const d = generateSVGPathData(parseFlatPolygons(polygons));
-    svg += `<path stroke="none" fill="${rgbaToHex(rgba)}" d="${d}"/>`;
+    svg += `<path stroke="none" ${svgFillAttrs(rgba, fillOpacity)} d="${d}"/>`;
   }
   svg += "</svg>";
   return svg;
@@ -135,12 +166,17 @@ export async function toRectangles(image: JimpImage): Promise<RectResult[]> {
   }));
 }
 
-export async function toRectSVG(image: JimpImage): Promise<string> {
-  const results = await toRectangles(image);
+export async function toRectSVG(
+  image: JimpImage,
+  options: SVGOptions = {},
+): Promise<string> {
+  const { fillOpacity = true } = options;
+  const results = processImage(image, 1);
   let svg = svgHeader(image.width, image.height);
-  for (const { color, rects } of results) {
+  for (const { rgba, polygons } of results) {
+    const rects = parseFlatRectangles(polygons);
     for (const { x, y, w, h } of rects) {
-      svg += `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${color}"/>`;
+      svg += `<rect x="${x}" y="${y}" width="${w}" height="${h}" ${svgFillAttrs(rgba, fillOpacity)}/>`;
     }
   }
   svg += "</svg>";
