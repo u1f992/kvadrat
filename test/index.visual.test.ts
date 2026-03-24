@@ -10,7 +10,7 @@ import {
   renderAsSVGRect,
   renderAsCSSBackground,
 } from "../src/index.ts";
-import type { JimpImage, Layer } from "../src/index.ts";
+import type { JimpImageCompat, Layer } from "../src/index.ts";
 
 let browser: Browser;
 
@@ -65,12 +65,12 @@ type Renderer = (
 ) => string;
 
 async function assertPixelPerfect(
-  image: JimpImage & { getPixelColor(x: number, y: number): number },
+  image: JimpImageCompat & { getPixelColor(x: number, y: number): number },
   renderer: Renderer,
   renderMode: "svg" | "css",
   rendererOpts?: Record<string, unknown>,
 ): Promise<{ rects: number; layers: number }> {
-  const { layers } = layeredDecompose(image);
+  const { layers } = await layeredDecompose(image);
   const { width, height } = image;
   const output = renderer(layers, width, height, rendererOpts);
 
@@ -93,7 +93,7 @@ async function assertPixelPerfect(
 }
 
 async function loadImage(): Promise<
-  JimpImage & {
+  JimpImageCompat & {
     getPixelColor(x: number, y: number): number;
     clone(): any;
     crop(opts: { x: number; y: number; w: number; h: number }): any;

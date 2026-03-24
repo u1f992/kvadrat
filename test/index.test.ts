@@ -6,21 +6,15 @@ import {
   renderAsSVGRect,
   renderAsCSSBackground,
 } from "../src/index.ts";
-import type { Layer } from "../src/index.ts";
+import type { JimpImageCompat, Layer } from "../src/index.ts";
 
 /* ─── Helpers ────────────────────────────────────────────────── */
-
-type MockImage = {
-  width: number;
-  height: number;
-  bitmap: { data: Uint8Array };
-};
 
 function makeImage(
   width: number,
   height: number,
   pixels: number[][],
-): MockImage {
+): JimpImageCompat {
   const data = new Uint8Array(width * height * 4);
   for (let i = 0; i < pixels.length; i++) {
     data[i * 4] = pixels[i]![0]!;
@@ -76,36 +70,36 @@ const G = [0, 255, 0, 255]; // green
 const B = [0, 0, 255, 255]; // blue
 
 describe("layeredDecompose", () => {
-  test("single color", () => {
+  test("single color", async () => {
     const img = makeImage(2, 2, [O, O, O, O]);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     assert.equal(totalRects(layers), 1);
     const expected = expectedPixels([0, 0, 0, 0], [O], 2);
     assert.deepEqual(renderLayers(layers, 2, 2), expected);
   });
 
-  test("one pixel different", () => {
+  test("one pixel different", async () => {
     // O O R
     // O O O
     // O O O
     const img = makeImage(3, 3, [O, O, R, O, O, O, O, O, O]);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     assert.equal(totalRects(layers), 2);
     const expected = expectedPixels([0, 0, 1, 0, 0, 0, 0, 0, 0], [O, R], 3);
     assert.deepEqual(renderLayers(layers, 3, 3), expected);
   });
 
-  test("L-shape bbox expansion", () => {
+  test("L-shape bbox expansion", async () => {
     // O R O
     // O R R
     // O O O
     const img = makeImage(3, 3, [O, R, O, O, R, R, O, O, O]);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     assert.equal(totalRects(layers), 3);
     for (const l of layers) assert.equal(l.rects.length, 1, `color=${l.color}`);
   });
 
-  test("nested ring", () => {
+  test("nested ring", async () => {
     // prettier-ignore
     const px = [
       O,O,O,O,O,
@@ -115,11 +109,11 @@ describe("layeredDecompose", () => {
       O,O,O,O,O,
     ];
     const img = makeImage(5, 5, px);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     assert.equal(totalRects(layers), 3);
   });
 
-  test("deep nesting (3 levels)", () => {
+  test("deep nesting (3 levels)", async () => {
     // prettier-ignore
     const px = [
       O,O,O,O,O,O,
@@ -130,11 +124,11 @@ describe("layeredDecompose", () => {
       O,O,O,O,O,O,
     ];
     const img = makeImage(6, 6, px);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     assert.equal(totalRects(layers), 3);
   });
 
-  test("staircase — each layer is a single rect", () => {
+  test("staircase — each layer is a single rect", async () => {
     // prettier-ignore
     const px = [
       R,R,R,R,R,
@@ -144,17 +138,17 @@ describe("layeredDecompose", () => {
       O,O,O,O,R,
     ];
     const img = makeImage(5, 5, px);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     for (const l of layers) assert.equal(l.rects.length, 1, `color=${l.color}`);
   });
 
-  test("center pixel — hole becomes 2 rects", () => {
+  test("center pixel — hole becomes 2 rects", async () => {
     const img = makeImage(3, 3, [O, O, O, O, R, O, O, O, O]);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     assert.equal(totalRects(layers), 2);
   });
 
-  test("snake — terminates", () => {
+  test("snake — terminates", async () => {
     // prettier-ignore
     const px = [
       R,O,O,O,
@@ -163,11 +157,11 @@ describe("layeredDecompose", () => {
       O,O,O,R,
     ];
     const img = makeImage(4, 4, px);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     assert.ok(totalRects(layers) > 0);
   });
 
-  test("3 colors: concentric rings", () => {
+  test("3 colors: concentric rings", async () => {
     // prettier-ignore
     const px = [
       O,O,O,O,O,
@@ -177,11 +171,11 @@ describe("layeredDecompose", () => {
       O,O,O,O,O,
     ];
     const img = makeImage(5, 5, px);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     assert.equal(totalRects(layers), 3);
   });
 
-  test("4 colors: concentric squares", () => {
+  test("4 colors: concentric squares", async () => {
     // prettier-ignore
     const px = [
       O,O,O,O,O,O,O,
@@ -193,15 +187,15 @@ describe("layeredDecompose", () => {
       O,O,O,O,O,O,O,
     ];
     const img = makeImage(7, 7, px);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     assert.equal(totalRects(layers), 4);
   });
 
-  test("rendering correctness", () => {
+  test("rendering correctness", async () => {
     // O R G
     // O O O
     const img = makeImage(3, 2, [O, R, G, O, O, O]);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     const expected = expectedPixels([0, 1, 2, 0, 0, 0], [O, R, G], 3);
     assert.deepEqual(renderLayers(layers, 3, 2), expected);
   });
@@ -210,9 +204,9 @@ describe("layeredDecompose", () => {
 /* ─── Renderers ──────────────────────────────────────────────── */
 
 describe("renderAsSVGPolygon", () => {
-  test("produces path elements with correct fill order", () => {
+  test("produces path elements with correct fill order", async () => {
     const img = makeImage(3, 3, [O, O, R, O, O, O, O, O, O]);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     const svg = renderAsSVGPolygon(layers, 3, 3);
     assert.ok(svg.startsWith("<svg"));
     assert.ok(svg.endsWith("</svg>"));
@@ -220,43 +214,43 @@ describe("renderAsSVGPolygon", () => {
     assert.equal(paths.length, 2);
   });
 
-  test("path data uses h/v relative commands", () => {
+  test("path data uses h/v relative commands", async () => {
     const img = makeImage(2, 2, [O, O, O, O]);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     const svg = renderAsSVGPolygon(layers, 2, 2);
     assert.ok(svg.includes("M0,0h2v2h-2z"));
   });
 });
 
 describe("renderAsSVGRect", () => {
-  test("produces rect elements", () => {
+  test("produces rect elements", async () => {
     const img = makeImage(2, 2, [O, O, O, O]);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     const svg = renderAsSVGRect(layers, 2, 2);
     assert.ok(svg.includes('<rect x="0" y="0" width="2" height="2"'));
   });
 });
 
 describe("renderAsCSSBackground", () => {
-  test("linear-gradient output", () => {
+  test("linear-gradient output", async () => {
     const img = makeImage(2, 2, [O, O, O, O]);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     const css = renderAsCSSBackground(layers, 2, 2);
     assert.ok(css.includes("linear-gradient("));
     assert.ok(css.includes("width: 2px"));
     assert.ok(css.includes(".image"));
   });
 
-  test("svg material output", () => {
+  test("svg material output", async () => {
     const img = makeImage(2, 2, [O, O, O, O]);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     const css = renderAsCSSBackground(layers, 2, 2, { material: "svg" });
     assert.ok(css.includes("data:image/svg+xml"));
   });
 
-  test("custom selector", () => {
+  test("custom selector", async () => {
     const img = makeImage(1, 1, [O]);
-    const { layers } = layeredDecompose(img as any);
+    const { layers } = await layeredDecompose(img);
     const css = renderAsCSSBackground(layers, 1, 1, { selector: ".foo" });
     assert.ok(css.startsWith(".foo {"));
   });

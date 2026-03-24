@@ -62,7 +62,7 @@ if (!MODES.includes(mode as (typeof MODES)[number])) {
 }
 
 const image = await Jimp.read(fs.readFileSync(input ?? process.stdin.fd));
-const { layers } = layeredDecompose(image);
+const { layers } = await layeredDecompose(image);
 
 if (mode === "css-background") {
   const material = cssMaterial === "svg" ? "svg" : "linear-gradient";

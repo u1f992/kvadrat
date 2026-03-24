@@ -7,12 +7,25 @@
 extern "C" {
 #endif
 
-/* Placeholder for future Wasm-accelerated implementation.
-   The layered decomposition algorithm currently runs in JavaScript
-   (poc/layered-decompose.mjs). This file is kept so the Wasm build
-   pipeline (Makefile, bindings.cpp) remains functional. */
+enum {
+  CORE_ERROR_ALLOC = -1,
+};
 
-int32_t placeholder(void);
+typedef struct {
+  uint32_t color; /* RGBA packed uint32 */
+  int32_t *rects; /* flat [x, y, w, h, ...], caller must free */
+  int32_t rects_len;
+} LayerResult;
+
+/*
+ * Layered rectangle decomposition of an RGBA image.
+ * pixels: width * height * 4 bytes RGBA.
+ * out_layers: pointer to array (allocated by this function).
+ * Returns number of layers, or negative on error.
+ * Caller must free each out_layers[i].rects, then free out_layers.
+ */
+int32_t layered_decompose(const uint8_t *pixels, int32_t width, int32_t height,
+                          LayerResult **out_layers);
 
 #ifdef __cplusplus
 }
