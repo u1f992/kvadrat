@@ -1,6 +1,6 @@
 /* ─── Types ───────────────────────────────────────────────────── */
 
-type JimpImage = {
+export type JimpImage = {
   width: number;
   height: number;
   bitmap: { data: Buffer | Uint8Array | Uint8ClampedArray | number[] };
@@ -12,7 +12,6 @@ export type Layer = {
   color: number; // RGBA packed as uint32 (R high, A low)
   rects: Rect[];
 };
-
 
 /* ─── Color helpers ──────────────────────────────────────────── */
 
@@ -153,14 +152,7 @@ function solve(
     const comps = findComponents(remaining, width, height);
 
     for (let i = comps.length - 1; i >= 0; i--) {
-      const sub = chooseRegion(
-        comps[i]!,
-        region,
-        bg,
-        pixels,
-        width,
-        height,
-      );
+      const sub = chooseRegion(comps[i]!, region, bg, pixels, width, height);
       if (sub !== null) {
         worklist.push(sub);
       } else {
@@ -280,7 +272,7 @@ function outerFill(
   const wall = new Uint8Array(pw * ph);
   for (const idx of comp) {
     const px = (idx % width) - x0 + 1;
-    const py = ((idx - (idx % width)) / width) - y0 + 1;
+    const py = (idx - (idx % width)) / width - y0 + 1;
     wall[py * pw + px] = 1;
   }
 
@@ -332,8 +324,7 @@ function decomposeRegion(region: Set<number>, width: number): Rect[] {
       }
 
       for (let dy = 0; dy < h; dy++)
-        for (let dx = 0; dx < w; dx++)
-          active.delete((y + dy) * width + x + dx);
+        for (let dx = 0; dx < w; dx++) active.delete((y + dy) * width + x + dx);
 
       rects.push({ x, y, w, h });
     }
