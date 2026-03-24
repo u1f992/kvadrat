@@ -15,6 +15,8 @@ import type { JimpImage, Layer } from "./index.js";
 let browser: Browser;
 
 before(async () => {
+  const tmpDir = path.join(import.meta.dirname, "..", ".vrt-tmp");
+  fs.rmSync(tmpDir, { recursive: true, force: true });
   browser = await puppeteer.launch({
     headless: true,
     args: ["--no-sandbox"],
@@ -35,21 +37,14 @@ async function renderInBrowser(
 ): Promise<Buffer> {
   const page = await browser.newPage();
   await page.setViewport({ width, height, deviceScaleFactor: 1 });
-  const tmp = path.join(
-    import.meta.dirname,
-    "..",
-    "test",
-    `_vrt_tmp_${Date.now()}.${ext}`,
-  );
+  const tmpDir = path.join(import.meta.dirname, "..", ".vrt-tmp");
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const tmp = path.join(tmpDir, `${Date.now()}.${ext}`);
   fs.writeFileSync(tmp, content, "utf-8");
-  try {
-    await page.goto("file://" + tmp, { waitUntil: "load" });
-    const buf = await page.screenshot({ type: "png", omitBackground: true });
-    return Buffer.from(buf);
-  } finally {
-    fs.unlinkSync(tmp);
-    await page.close();
-  }
+  await page.goto("file://" + tmp, { waitUntil: "load" });
+  const buf = await page.screenshot({ type: "png", omitBackground: true });
+  await page.close();
+  return Buffer.from(buf);
 }
 
 function renderSVG(svg: string, w: number, h: number) {
@@ -104,7 +99,7 @@ async function loadImage(): Promise<
     crop(opts: { x: number; y: number; w: number; h: number }): any;
   }
 > {
-  const inputPath = path.join(import.meta.dirname, "..", "test", "input.png");
+  const inputPath = path.join(import.meta.dirname, "..", "assets", "input.png");
   return Jimp.read(inputPath) as any;
 }
 

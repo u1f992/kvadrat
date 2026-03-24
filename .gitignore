@@ -132,6 +132,9 @@ dist
 src/version.ts
 src/wasm/
 
+# VRT temp files
+.vrt-tmp/
+
 # yarn v2
 .yarn/cache
 .yarn/unplugged

@@ -4,7 +4,7 @@ Vectorizes bitmap images by converting each pixel into polygons and merging regi
 
 |         Input         |         Output         |
 | :-------------------: | :--------------------: |
-| ![](./test/input.png) | ![](./test/output.svg) |
+| ![](./assets/input.png) | ![](./assets/output.svg) |
 
 The SVG conversion algorithm is based on [ygoe/qrcode-generator](https://github.com/ygoe/qrcode-generator/blob/985860d3e6c42b5d174132a4ecce4a8c0c88f88f/js/qrcode.js#L491-L668) (MIT License).
 
@@ -19,7 +19,7 @@ $ svgo input+dither-colors_64.svg -o output+dither-colors_64+svgo.svg
 
 |         Input         |                    Output                    |
 | :-------------------: | :------------------------------------------: |
-| ![](./test/input.png) | ![](./test/output+dither-colors_64+svgo.svg) |
+| ![](./assets/input.png) | ![](./assets/output+dither-colors_64+svgo.svg) |
 
 </details>
 
