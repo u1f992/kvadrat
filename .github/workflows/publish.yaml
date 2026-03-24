@@ -1,6 +1,6 @@
 # see https://docs.npmjs.com/trusted-publishers
 
-name: Publish Package
+name: Publish Package and Deploy Pages
 
 on:
   push:
@@ -10,9 +10,17 @@ on:
 permissions:
   id-token: write  # Required for OIDC
   contents: read
+  pages: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
   publish:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -21,11 +29,32 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/web/package-lock.json
           registry-url: 'https://registry.npmjs.org'
+
       # TODO: remove --legacy-peer-deps once typescript-eslint supports TS6 (see package.json)
       - run: npm ci --legacy-peer-deps
       - run: npm run build
+
+      # --- npm publish ---
+
       # Tests use full hardware concurrency and are expensive on CI runners.
       # Run locally before tagging.
       # - run: npm test
       - run: npm publish --access public
+
+      # --- Deploy to GitHub Pages ---
+
+      - run: npm ci --legacy-peer-deps
+        working-directory: packages/web
+      - run: npm run build
+        working-directory: packages/web
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: packages/web/dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
