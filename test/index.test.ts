@@ -5,8 +5,8 @@ import {
   renderAsSVGPolygon,
   renderAsSVGRect,
   renderAsCSSBackground,
-} from "./index.js";
-import type { Layer } from "./index.js";
+} from "../src/index.ts";
+import type { Layer } from "../src/index.ts";
 
 /* ─── Helpers ────────────────────────────────────────────────── */
 

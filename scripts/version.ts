@@ -9,7 +9,9 @@ try {
     stdio: "ignore",
   });
 } catch {
-  const hash = execSync("git rev-parse --short HEAD", { encoding: "utf-8" }).trim();
+  const hash = execSync("git rev-parse --short HEAD", {
+    encoding: "utf-8",
+  }).trim();
   suffix = `+${hash}`;
 }
 

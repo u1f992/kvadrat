@@ -9,8 +9,8 @@ import {
   renderAsSVGPolygon,
   renderAsSVGRect,
   renderAsCSSBackground,
-} from "./index.js";
-import type { JimpImage, Layer } from "./index.js";
+} from "../src/index.ts";
+import type { JimpImage, Layer } from "../src/index.ts";
 
 let browser: Browser;
 

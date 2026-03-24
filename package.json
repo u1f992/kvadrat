@@ -6,12 +6,14 @@
     "kvadrat": "dist/cli.js"
   },
   "scripts": {
-    "format": "prettier --write \"src/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\"",
     "build:wasm": "devcontainer exec --workspace-folder . make -C wasm",
     "clean:wasm": "devcontainer exec --workspace-folder . make -C wasm clean",
-    "build:version": "node scripts/version.js",
-    "build": "npm run build:version && npm run format && tsc",
-    "test": "npm run build && node --test \"dist/**/*.test.js\""
+    "build:scripts": "tsc -p scripts/tsconfig.json --noEmit",
+    "build:version": "npm run build:scripts && node scripts/version.ts",
+    "build": "npm run build:version && tsc",
+    "build:test": "tsc -p test/tsconfig.json --noEmit",
+    "test": "npm run build:test && node --test \"test/**/*.test.ts\""
   },
   "keywords": [],
   "homepage": "https://github.com/u1f992/kvadrat",
