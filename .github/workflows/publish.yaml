@@ -22,7 +22,8 @@ jobs:
           node-version: 22
           cache: npm
           registry-url: 'https://registry.npmjs.org'
-      - run: npm ci
+      # TODO: remove --legacy-peer-deps once typescript-eslint supports TS6 (see package.json)
+      - run: npm ci --legacy-peer-deps
       - run: npm run build
       # Tests use full hardware concurrency and are expensive on CI runners.
       # Run locally before tagging.
