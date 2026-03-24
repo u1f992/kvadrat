@@ -272,6 +272,27 @@ export function renderAsSVGPolygon(layers, width, height, colorToCSS) {
   return svg;
 }
 
+/**
+ * Render layers as SVG with <rect> elements, back-to-front.
+ */
+export function renderAsSVGRect(layers, width, height, colorToCSS) {
+  let svg =
+    `<svg xmlns="http://www.w3.org/2000/svg"` +
+    ` width="${width}" height="${height}"` +
+    ` viewBox="0 0 ${width} ${height}">`;
+
+  for (const { color, rects } of layers) {
+    if (rects.length === 0) continue;
+    const fill = colorToCSS(color);
+    for (const { x, y, w, h } of rects) {
+      svg += `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}"/>`;
+    }
+  }
+
+  svg += "</svg>";
+  return svg;
+}
+
 // ─── Test helpers ───────────────────────────────────────────────
 
 function totalRects(layers) {
@@ -716,52 +737,14 @@ describe("visual regression", () => {
     return { pixels, palette, width, height };
   }
 
-  test("synthetic 10×10: layered SVG matches naive per-pixel SVG", async () => {
-    const { Jimp } = await import("jimp");
-    const inputPath = path.join(__dirname, "..", "test", "input.png");
-    const fullImage = await Jimp.read(inputPath);
+  test("synthetic 10×10: path renderer", () =>
+    runCrop("10×10 path", 0, 0, 10, 10, renderAsSVGPolygon));
 
-    // Crop a small 10×10 region for fast PoC
-    const image = fullImage.clone().crop({ x: 0, y: 0, w: 10, h: 10 });
-    const { pixels, palette, width, height } = indexImage(image);
-    const toCSS = (c) => rgbaToCSS(palette[c]);
+  test("synthetic 10×10: rect renderer", () =>
+    runCrop("10×10 rect", 0, 0, 10, 10, renderAsSVGRect));
 
-    // ── Layered SVG ──
-    const layers = layeredDecompose(pixels, width);
-    const layeredSVG = renderAsSVGPolygon(layers, width, height, toCSS);
-
-    // ── Naive per-pixel SVG (ground truth) ──
-    let naiveSVG =
-      `<svg xmlns="http://www.w3.org/2000/svg"` +
-      ` width="${width}" height="${height}"` +
-      ` viewBox="0 0 ${width} ${height}">`;
-    for (let y = 0; y < height; y++)
-      for (let x = 0; x < width; x++) {
-        const c = pixels[y * width + x];
-        naiveSVG += `<rect x="${x}" y="${y}" width="1" height="1" fill="${toCSS(c)}"/>`;
-      }
-    naiveSVG += "</svg>";
-
-    // ── Render both and compare ──
-    const [layeredPng, naivePng] = await Promise.all([
-      renderSVG(layeredSVG, width, height),
-      renderSVG(naiveSVG, width, height),
-    ]);
-
-    const layeredImg = await Jimp.read(layeredPng);
-    const naiveImg = await Jimp.read(naivePng);
-
-    let diff = 0;
-    for (let y = 0; y < height; y++)
-      for (let x = 0; x < width; x++) {
-        if (layeredImg.getPixelColor(x, y) !== naiveImg.getPixelColor(x, y))
-          diff++;
-      }
-
-    assert.equal(diff, 0, `${diff} pixels differ out of ${width * height}`);
-  });
-
-  async function runCrop(label, cx, cy, cw, ch) {
+  /** renderer: (layers, w, h, colorToCSS) => svgString */
+  async function runCrop(label, cx, cy, cw, ch, renderer) {
     const { Jimp } = await import("jimp");
     const inputPath = path.join(__dirname, "..", "test", "input.png");
     const fullImage = await Jimp.read(inputPath);
@@ -772,7 +755,7 @@ describe("visual regression", () => {
     const t0 = performance.now();
     const layers = layeredDecompose(pixels, width);
     const dt = performance.now() - t0;
-    const layeredSVG = renderAsSVGPolygon(layers, width, height, toCSS);
+    const layeredSVG = renderer(layers, width, height, toCSS);
 
     // Naive per-pixel SVG as ground truth
     let naiveSVG =
@@ -810,57 +793,40 @@ describe("visual regression", () => {
     return { colors: palette.length, rects: nRects, naive: width * height, ms: dt };
   }
 
-  test("50×50 (0,0)", async () => {
-    await runCrop("50×50", 0, 0, 50, 50);
-  });
-
-  test("100×100 (0,0) 203 colors", async () => {
-    await runCrop("100×100", 0, 0, 100, 100);
-  });
-
-  test("200×100 (0,0) 203 colors", async () => {
-    await runCrop("200×100", 0, 0, 200, 100);
-  });
-
-  test("200×100 (200,0) 164 colors", async () => {
-    await runCrop("200×100 b", 200, 0, 200, 100);
-  });
-
-  test("full image 1390×900", async () => {
+  async function runFull(label, renderer) {
     const { Jimp } = await import("jimp");
     const inputPath = path.join(__dirname, "..", "test", "input.png");
     const image = await Jimp.read(inputPath);
     const { pixels, palette, width, height } = indexImage(image);
     const toCSS = (c) => rgbaToCSS(palette[c]);
 
-    console.log(`  full: ${width}×${height}, ${palette.length} colors`);
-
     const t0 = performance.now();
     const layers = layeredDecompose(pixels, width);
     const dt = performance.now() - t0;
 
     const nRects = totalRects(layers);
-    console.log(`  full: ${nRects} rects (naive: ${width * height}), ${dt.toFixed(0)}ms`);
-    console.log(`  full: ${layers.length} layers`);
+    console.log(`  ${label}: ${nRects} rects, ${layers.length} layers, ${dt.toFixed(0)}ms`);
 
-    // Render SVG and verify via Puppeteer
-    const layeredSVG = renderAsSVGPolygon(layers, width, height, toCSS);
-
-    // Build a naive 1-rect-per-color SVG (grouped by color, no overlap)
-    // Too large for per-pixel naive, so just verify rendering correctness
-    // by checking a sample of pixels
+    const layeredSVG = renderer(layers, width, height, toCSS);
     const pngBuf = await renderSVG(layeredSVG, width, height);
     const rendered = await Jimp.read(pngBuf);
 
     let diff = 0;
-    const total = width * height;
-    for (let y = 0; y < height; y++) {
+    for (let y = 0; y < height; y++)
       for (let x = 0; x < width; x++) {
         if (rendered.getPixelColor(x, y) !== image.getPixelColor(x, y))
           diff++;
       }
-    }
-    console.log(`  full: ${diff} pixel diffs out of ${total}`);
-    assert.equal(diff, 0, `${diff} pixels differ out of ${total}`);
-  });
+    console.log(`  ${label}: ${diff} pixel diffs out of ${width * height}`);
+    assert.equal(diff, 0, `${diff} pixels differ`);
+  }
+
+  for (const [name, renderer] of [
+    ["path", renderAsSVGPolygon],
+    ["rect", renderAsSVGRect],
+  ]) {
+    test(`${name}: 50×50 (0,0)`, () => runCrop("50×50 " + name, 0, 0, 50, 50, renderer));
+    test(`${name}: 200×100 (0,0)`, () => runCrop("200×100 " + name, 0, 0, 200, 100, renderer));
+    test(`${name}: full 1390×900`, () => runFull("full " + name, renderer));
+  }
 });
