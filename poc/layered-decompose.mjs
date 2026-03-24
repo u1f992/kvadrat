@@ -293,6 +293,40 @@ export function renderAsSVGRect(layers, width, height, colorToCSS) {
   return svg;
 }
 
+/**
+ * Render layers as CSS background property.
+ * CSS background stacking: first listed = topmost. Layers are bottom-to-top,
+ * so we iterate in reverse.
+ *
+ * @param {object} [options]
+ * @param {string} [options.selector=".image"]
+ * @param {"linear-gradient"|"svg"} [options.material="linear-gradient"]
+ */
+export function renderAsCSSBackground(layers, width, height, colorToCSS, options = {}) {
+  const { selector = ".image", material = "linear-gradient" } = options;
+  const bgs = [];
+
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const { color, rects } = layers[i];
+    if (rects.length === 0) continue;
+    const fill = colorToCSS(color);
+    for (const { x, y, w, h } of rects) {
+      if (material === "svg") {
+        const encoded = fill.replace(/#/g, "%23");
+        bgs.push(
+          `url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><rect fill='${encoded}' width='1' height='1'/></svg>") ${x}px ${y}px / ${w}px ${h}px no-repeat`,
+        );
+      } else {
+        bgs.push(
+          `linear-gradient(${fill},${fill}) ${x}px ${y}px / ${w}px ${h}px no-repeat`,
+        );
+      }
+    }
+  }
+
+  return `${selector} {\n  width: ${width}px;\n  height: ${height}px;\n  background:\n    ${bgs.join(",\n    ")};\n}\n`;
+}
+
 // ─── Test helpers ───────────────────────────────────────────────
 
 function totalRects(layers) {
@@ -691,11 +725,11 @@ describe("visual regression", () => {
     await browser?.close();
   });
 
-  async function renderSVG(svgContent, width, height) {
+  async function renderInBrowser(content, width, height, ext = "svg") {
     const page = await browser.newPage();
     await page.setViewport({ width, height, deviceScaleFactor: 1 });
-    const tmp = path.join(__dirname, `_vrt_tmp_${Date.now()}.svg`);
-    fs.writeFileSync(tmp, svgContent, "utf-8");
+    const tmp = path.join(__dirname, `_vrt_tmp_${Date.now()}.${ext}`);
+    fs.writeFileSync(tmp, content, "utf-8");
     try {
       await page.goto("file://" + tmp, { waitUntil: "load" });
       const buf = await page.screenshot({ type: "png", omitBackground: true });
@@ -704,6 +738,16 @@ describe("visual regression", () => {
       fs.unlinkSync(tmp);
       await page.close();
     }
+  }
+
+  function renderSVG(svgContent, width, height) {
+    return renderInBrowser(svgContent, width, height, "svg");
+  }
+
+  function renderCSS(cssContent, width, height, selector) {
+    const className = selector.replace(/^\./, "");
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${cssContent}</style></head><body style="margin:0"><div class="${className}"></div></body></html>`;
+    return renderInBrowser(html, width, height, "html");
   }
 
   function rgbaToCSS(rgba) {
@@ -737,14 +781,23 @@ describe("visual regression", () => {
     return { pixels, palette, width, height };
   }
 
-  test("synthetic 10×10: path renderer", () =>
+  test("synthetic 10×10: path", () =>
     runCrop("10×10 path", 0, 0, 10, 10, renderAsSVGPolygon));
 
-  test("synthetic 10×10: rect renderer", () =>
+  test("synthetic 10×10: rect", () =>
     runCrop("10×10 rect", 0, 0, 10, 10, renderAsSVGRect));
 
-  /** renderer: (layers, w, h, colorToCSS) => svgString */
-  async function runCrop(label, cx, cy, cw, ch, renderer) {
+  test("synthetic 10×10: css-gradient", () =>
+    runCrop("10×10 css-grad", 0, 0, 10, 10, renderAsCSSBackground, "css", { selector: ".image", material: "linear-gradient" }));
+
+  test("synthetic 10×10: css-svg", () =>
+    runCrop("10×10 css-svg", 0, 0, 10, 10, renderAsCSSBackground, "css", { selector: ".image", material: "svg" }));
+
+  /**
+   * renderer: (layers, w, h, colorToCSS, options?) => string
+   * renderMode: "svg" | "css" — determines how to screenshot the output
+   */
+  async function runCrop(label, cx, cy, cw, ch, renderer, renderMode = "svg", rendererOpts) {
     const { Jimp } = await import("jimp");
     const inputPath = path.join(__dirname, "..", "test", "input.png");
     const fullImage = await Jimp.read(inputPath);
@@ -755,7 +808,7 @@ describe("visual regression", () => {
     const t0 = performance.now();
     const layers = layeredDecompose(pixels, width);
     const dt = performance.now() - t0;
-    const layeredSVG = renderer(layers, width, height, toCSS);
+    const output = renderer(layers, width, height, toCSS, rendererOpts);
 
     // Naive per-pixel SVG as ground truth
     let naiveSVG =
@@ -769,8 +822,11 @@ describe("visual regression", () => {
       }
     naiveSVG += "</svg>";
 
+    const selector = rendererOpts?.selector ?? ".image";
     const [layeredPng, naivePng] = await Promise.all([
-      renderSVG(layeredSVG, width, height),
+      renderMode === "css"
+        ? renderCSS(output, width, height, selector)
+        : renderSVG(output, width, height),
       renderSVG(naiveSVG, width, height),
     ]);
 
@@ -790,10 +846,9 @@ describe("visual regression", () => {
     );
 
     assert.equal(diff, 0, `${diff} pixels differ out of ${width * height}`);
-    return { colors: palette.length, rects: nRects, naive: width * height, ms: dt };
   }
 
-  async function runFull(label, renderer) {
+  async function runFull(label, renderer, renderMode = "svg", rendererOpts) {
     const { Jimp } = await import("jimp");
     const inputPath = path.join(__dirname, "..", "test", "input.png");
     const image = await Jimp.read(inputPath);
@@ -807,8 +862,11 @@ describe("visual regression", () => {
     const nRects = totalRects(layers);
     console.log(`  ${label}: ${nRects} rects, ${layers.length} layers, ${dt.toFixed(0)}ms`);
 
-    const layeredSVG = renderer(layers, width, height, toCSS);
-    const pngBuf = await renderSVG(layeredSVG, width, height);
+    const output = renderer(layers, width, height, toCSS, rendererOpts);
+    const selector = rendererOpts?.selector ?? ".image";
+    const pngBuf = renderMode === "css"
+      ? await renderCSS(output, width, height, selector)
+      : await renderSVG(output, width, height);
     const rendered = await Jimp.read(pngBuf);
 
     let diff = 0;
@@ -821,12 +879,17 @@ describe("visual regression", () => {
     assert.equal(diff, 0, `${diff} pixels differ`);
   }
 
-  for (const [name, renderer] of [
-    ["path", renderAsSVGPolygon],
-    ["rect", renderAsSVGRect],
+  const cssOpts = { selector: ".image", material: "linear-gradient" };
+  const cssSvgOpts = { selector: ".image", material: "svg" };
+
+  for (const [name, renderer, mode, opts] of [
+    ["path", renderAsSVGPolygon, "svg"],
+    ["rect", renderAsSVGRect, "svg"],
+    ["css-gradient", renderAsCSSBackground, "css", cssOpts],
+    ["css-svg", renderAsCSSBackground, "css", cssSvgOpts],
   ]) {
-    test(`${name}: 50×50 (0,0)`, () => runCrop("50×50 " + name, 0, 0, 50, 50, renderer));
-    test(`${name}: 200×100 (0,0)`, () => runCrop("200×100 " + name, 0, 0, 200, 100, renderer));
-    test(`${name}: full 1390×900`, () => runFull("full " + name, renderer));
+    test(`${name}: 50×50 (0,0)`, () => runCrop("50×50 " + name, 0, 0, 50, 50, renderer, mode, opts));
+    test(`${name}: 200×100 (0,0)`, () => runCrop("200×100 " + name, 0, 0, 200, 100, renderer, mode, opts));
+    test(`${name}: full 1390×900`, () => runFull("full " + name, renderer, mode, opts));
   }
 });
