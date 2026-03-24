@@ -1,7 +1,7 @@
 {
   "private": true,
   "scripts": {
-    "build": "shx mkdir -p dist && shx cp index.html dist/ && shx cp node_modules/coi-serviceworker/coi-serviceworker.min.js dist/ && shx cp ../../dist/index.js ../../dist/version.js dist/",
+    "build": "shx mkdir -p dist/wasm && shx cp index.html dist/ && shx cp node_modules/coi-serviceworker/coi-serviceworker.min.js dist/ && shx cp ../../dist/index.js ../../dist/version.js dist/ && shx cp ../../dist/wasm/core.js ../../dist/wasm/core.wasm dist/wasm/",
     "setup-cert": "mkcert create-ca && mkcert create-cert",
     "serve": "serve dist -l 3000 --ssl-cert cert.crt --ssl-key cert.key"
   },

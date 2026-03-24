@@ -34,6 +34,7 @@
       </div>
       <button type="submit" id="run">Run</button>
     </form>
+    <div id="info"></div>
     <div id="result"></div>
 
     <script type="module">
@@ -90,6 +91,7 @@
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
         result.innerHTML = "";
+        document.getElementById("info").textContent = "";
 
         const file = fileInput.files[0];
         if (!file) return;
@@ -98,7 +100,10 @@
         runButton.textContent = "Processing...";
         try {
           const image = await loadImage(file);
-          const { layers } = layeredDecompose(image);
+          const t0 = performance.now();
+          const { layers } = await layeredDecompose(image);
+          const dt = performance.now() - t0;
+          document.getElementById("info").textContent = `${image.width}x${image.height}, ${layers.length} layers, ${layers.reduce((s,l) => s + l.rects.length, 0)} rects, ${dt.toFixed(0)}ms`;
           const mode = modeSelect.value;
 
           if (mode === "css-background") {
@@ -132,7 +137,9 @@
               mode === "rectangle"
                 ? renderAsSVGRect(layers, image.width, image.height)
                 : renderAsSVGPolygon(layers, image.width, image.height);
-            result.innerHTML = svg;
+            const div = document.createElement("div");
+            div.innerHTML = svg;
+            result.appendChild(div);
           }
         } finally {
           runButton.disabled = false;
