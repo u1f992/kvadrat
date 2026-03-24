@@ -7,16 +7,13 @@ Also: eliminate subpixel gaps at color boundaries (polygon mode).
 
 ## Benchmark: test/input.png (1390×900, 1466 colors)
 
-| Approach | Rects | Time | Notes |
-|---|---:|---:|---|
-| Greedy row-run + vertical ext (baseline) | 34,255 | ~13s | Current `build_rectangles` in core.c |
-| Layered decompose PoC (JS) | 122,610 | ~18s | Correct (0 pixel diff), but rect count 3.6× worse |
+| Approach | Rects | Layers | Time (JS) | Notes |
+|---|---:|---:|---:|---|
+| Greedy row-run + vertical ext (baseline) | 34,255 | 1,466 | ~13s | Current `build_rectangles` in core.c (Wasm) |
+| Layered v1 (raw comp fallback) | 122,610 | 15,912 | ~10s | Guard blocks outerFill → holey regions → rect explosion |
+| **Layered v2 (flat per-color fallback)** | **32,655** | **1,810** | **~3s** | **-4.7% vs baseline, correct (0 diff)** |
 
-## Approach: Layered Recursive Decomposition
-
-Z-order + 領域重なりで穴なし保証 → 矩形分割最適化 + 白筋解消を同時に狙う。
-
-### 定式化 (poc/layered-decompose.mjs)
+## Algorithm: Layered Recursive Decomposition (poc/layered-decompose.mjs)
 
 ```
 SOLVE(R, C):
@@ -24,28 +21,27 @@ SOLVE(R, C):
   emit layer (c*, R)
   remaining = {p ∈ R : C(p) ≠ c*}
   for each 4-connected component K of remaining:
-    R_K = chooseRegion(K)   // bbox拡張 or outerFill or comp自体
-    push SOLVE(R_K, C|R_K)
+    R_K = chooseRegion(K)  // bbox expansion or outerFill
+    if R_K is not null:
+      push SOLVE(R_K, C|R_K)
+    else:
+      // Guard fired: flat per-color decomposition
+      for each color c in K:
+        emit layer (c, greedy_decompose(pixels of c in K))
 ```
 
-### VRT結果 (crops)
+### chooseRegion strategy
+
+1. **bbox expansion**: comp の bbox 内の非 comp ピクセルが全て bg かつ parent 内 → bbox に拡張
+2. **outerFill**: comp の穴を埋めた結果が parent より小さい → 穴埋め版を使用
+3. **null (flat fallback)**: 上記いずれも不可 → 色ごとにフラット分解
+
+### VRT結果
 
 | Crop | Colors | Rects | Naive | Reduction | Pixel diff |
 |---|---:|---:|---:|---:|---:|
 | 50×50 (0,0) | 88 | 321 | 2,500 | 87% | 0 |
-| 100×100 (0,0) | 118 | 1,015 | 10,000 | 90% | 0 |
-| 200×100 (0,0) | 203 | 2,923 | 20,000 | 85% | 0 |
-| Full 1390×900 | 1,466 | 122,610 | 1,251,000 | 90% | 0 |
-
-### 問題: naive比では削減だが baseline比では3.6倍悪化
-
-原因: `outerFill` が親領域と同サイズになる場合（穴が大きい場合）、
-無限ループ防止のため穴埋めをスキップ → 穴あり領域を greedy 分割 → 小矩形大量発生。
-同じ色が多層に分散（15,912層）するオーバーヘッドも大きい。
-
-### 次のステップ
-
-穴埋めスキップ時の代替戦略が必要:
-- 穴あり領域を bridge 分割して穴なしに変換する
-- outerFill ガードの条件を緩和する（親と同サイズでも bg が変われば収束する）
-- 層の統合: 同色の層をマージして重複を削減
+| 100×100 (0,0) | 118 | 1,010 | 10,000 | 90% | 0 |
+| 200×100 (0,0) | 203 | 2,918 | 20,000 | 85% | 0 |
+| 200×100 (200,0) | 164 | 2,523 | 20,000 | 87% | 0 |
+| Full 1390×900 | 1,466 | 32,655 | 1,251,000 | 97% | 0 |

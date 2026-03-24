@@ -66,12 +66,22 @@ function solve(pixels, width, height, initialRegion) {
     }
     const comps = findComponents(remaining, width, height);
 
-    // Push in reverse so first component is processed first (LIFO)
-    const subs = comps.map((comp) =>
-      chooseRegion(comp, region, bg, pixels, width, height),
-    );
-    for (let i = subs.length - 1; i >= 0; i--) {
-      worklist.push(subs[i]);
+    for (let i = comps.length - 1; i >= 0; i--) {
+      const sub = chooseRegion(comps[i], region, bg, pixels, width, height);
+      if (sub !== null) {
+        worklist.push(sub);
+      } else {
+        // Guard fired: flat per-color decomposition (parent bg is underneath)
+        const byColor = new Map();
+        for (const idx of comps[i]) {
+          const c = pixels[idx];
+          if (!byColor.has(c)) byColor.set(c, new Set());
+          byColor.get(c).add(idx);
+        }
+        for (const [color, pxSet] of byColor) {
+          layers.push({ color, rects: decomposeRegion(pxSet, width) });
+        }
+      }
     }
   }
 
@@ -151,9 +161,8 @@ function chooseRegion(comp, parentRegion, bg, pixels, width, height) {
   }
 
   const filled = outerFill(comp, width, height);
-  // Guard: outerFill with large holes can recreate the parent → infinite loop
   if (filled.size < parentRegion.size) return filled;
-  return new Set(comp);
+  return null; // signal: use flat per-color decomposition
 }
 
 /**
