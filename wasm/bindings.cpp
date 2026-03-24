@@ -26,9 +26,8 @@ val processImage(val pixelsVal, int32_t width, int32_t height,
     entry.set("color", layers[i].color);
 
     val rectsArray = val::global("Int32Array").new_(layers[i].rects_len);
-    rectsArray.call<void>(
-        "set", val(emscripten::typed_memory_view(layers[i].rects_len,
-                                                 layers[i].rects)));
+    rectsArray.call<void>("set", val(emscripten::typed_memory_view(
+                                     layers[i].rects_len, layers[i].rects)));
     entry.set("rects", rectsArray);
 
     free(layers[i].rects);

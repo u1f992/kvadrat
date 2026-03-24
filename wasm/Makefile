@@ -27,6 +27,7 @@ format:
 
 tidy:
 	clang-tidy $(C_SOURCES) -- -I.
+	@echo "Note: $(CPP_SOURCES) skipped (requires Emscripten include paths)"
 
 clean:
 	rm -rf $(OUT_DIR)
