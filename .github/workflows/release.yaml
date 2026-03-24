@@ -1,0 +1,29 @@
+name: Create GitHub Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # to generate release note
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm pack
+      - run: |
+          gh release create "${VERSION}" --title "${VERSION}" --generate-notes
+          gh release upload "${VERSION}" *.tgz
+        env:
+          GH_TOKEN: ${{ github.token }}
