@@ -4,7 +4,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { Jimp } from "jimp";
-import { toSVG, toRectSVG, toCSSBackground } from "./index.js";
+import {
+  layeredDecompose,
+  renderAsSVGPolygon,
+  renderAsSVGRect,
+  renderAsCSSBackground,
+} from "./index.js";
 import { VERSION } from "./version.js";
 
 const {
@@ -57,10 +62,14 @@ if (!MODES.includes(mode as (typeof MODES)[number])) {
 }
 
 const image = await Jimp.read(fs.readFileSync(input ?? process.stdin.fd));
+const { layers } = layeredDecompose(image);
 
 if (mode === "css-background") {
   const material = cssMaterial === "svg" ? "svg" : "linear-gradient";
-  const css = await toCSSBackground(image, cssSelector, { material });
+  const css = renderAsCSSBackground(layers, image.width, image.height, {
+    selector: cssSelector,
+    material,
+  });
   if (output) {
     fs.writeFileSync(output, css, { encoding: "utf-8" });
 
@@ -86,8 +95,8 @@ if (mode === "css-background") {
   const svgOptions = { fillOpacity: !rgba };
   const svg =
     mode === "rectangle"
-      ? await toRectSVG(image, svgOptions)
-      : await toSVG(image, svgOptions);
+      ? renderAsSVGRect(layers, image.width, image.height, svgOptions)
+      : renderAsSVGPolygon(layers, image.width, image.height, svgOptions);
   if (output) {
     fs.writeFileSync(output, svg, { encoding: "utf-8" });
   } else {
