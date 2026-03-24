@@ -2,8 +2,8 @@
 
 Vectorizes bitmap images using layered recursive decomposition with z-ordered rectangle output.
 
-|         Input         |         Output         |
-| :-------------------: | :--------------------: |
+|          Input          |          Output          |
+| :---------------------: | :----------------------: |
 | ![](./assets/input.png) | ![](./assets/output.svg) |
 
 Uses layered recursive decomposition: picks the most frequent color as background, paints the entire region, then recurses on remaining components. Layers are rendered back-to-front with z-ordering, eliminating subpixel gaps at color boundaries.
@@ -17,11 +17,13 @@ $ kvadrat --input input+dither-colors_64.png --output input+dither-colors_64.svg
 $ svgo input+dither-colors_64.svg -o output+dither-colors_64+svgo.svg
 ```
 
-|         Input         |                    Output                    |
-| :-------------------: | :------------------------------------------: |
+|          Input          |                     Output                     |
+| :---------------------: | :--------------------------------------------: |
 | ![](./assets/input.png) | ![](./assets/output+dither-colors_64+svgo.svg) |
 
 </details>
+
+The output may show grid-like artifacts or wrinkles at non-integer scale factors due to subpixel rounding in the renderer. This is inherent to vector representations of pixel data. Displaying at an integer multiple of the original pixel dimensions may help.
 
 ## Performance
 

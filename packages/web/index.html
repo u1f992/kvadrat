@@ -8,6 +8,8 @@
   </head>
   <body>
     <h1>kvadrat <small id="version"></small></h1>
+    <p>Vectorizes bitmap images using layered recursive decomposition with z-ordered rectangle output.</p>
+    <p>The output may show grid-like artifacts at non-integer scale factors due to subpixel rounding in the renderer. Displaying at an integer multiple of the original pixel dimensions may help.</p>
     <form id="form" onsubmit="return false">
       <div>
         <label for="file">Image:</label>
@@ -114,42 +116,48 @@
           document.getElementById("info").textContent = `${image.width}x${image.height}, ${layers.length} layers, ${layers.reduce((s,l) => s + l.rects.length, 0)} rects, ${dt.toFixed(0)}ms`;
           const mode = modeSelect.value;
 
+          let preview, output;
+
           if (mode === "css-background") {
             const selector = selectorInput.value || ".image";
             const material = materialSelect.value;
-
-            const previewCss = renderAsCSSBackground(
+            preview = renderAsCSSBackground(
               layers, image.width, image.height,
               { selector: ".image", material },
             );
-            const css = renderAsCSSBackground(
+            output = renderAsCSSBackground(
               layers, image.width, image.height,
               { selector, material },
             );
+          } else {
+            const svgOptions = { fillOpacity: !document.getElementById("rgba").checked };
+            output = mode === "rectangle"
+              ? renderAsSVGRect(layers, image.width, image.height, svgOptions)
+              : renderAsSVGPolygon(layers, image.width, image.height, svgOptions);
+            preview = output;
+          }
 
+          // Preview
+          if (mode === "css-background") {
             const style = document.createElement("style");
-            style.textContent = previewCss;
+            style.textContent = preview;
             result.appendChild(style);
             const div = document.createElement("div");
             div.className = "image";
             result.appendChild(div);
-
-            const textarea = document.createElement("textarea");
-            textarea.value = css;
-            textarea.rows = 20;
-            textarea.cols = 80;
-            textarea.readOnly = true;
-            result.appendChild(textarea);
           } else {
-            const svgOptions = { fillOpacity: !document.getElementById("rgba").checked };
-            const svg =
-              mode === "rectangle"
-                ? renderAsSVGRect(layers, image.width, image.height, svgOptions)
-                : renderAsSVGPolygon(layers, image.width, image.height, svgOptions);
             const div = document.createElement("div");
-            div.innerHTML = svg;
+            div.innerHTML = preview;
             result.appendChild(div);
           }
+
+          // Copyable text output
+          const textarea = document.createElement("textarea");
+          textarea.value = output;
+          textarea.rows = 20;
+          textarea.cols = 80;
+          textarea.readOnly = true;
+          result.appendChild(textarea);
         } finally {
           runButton.disabled = false;
           runButton.textContent = "Run";
