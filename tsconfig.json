@@ -16,6 +16,7 @@
     // and npm install -D @types/node
 
     // Interoperability with Node.js Type Stripping
+    // see https://github.com/u1f992/blog/blob/main/articles/019c44f4-bc9c-7487-b398-712364c3c380/README.md
     "rewriteRelativeImportExtensions": true,
 
     // Other Outputs
@@ -45,5 +46,6 @@
     "skipLibCheck": true,
   },
   // error TS6059: File '/.../test/index.test.ts' is not under 'rootDir' '/.../src'. 'rootDir' is expected to contain all source files.
+  // see https://github.com/u1f992/blog/blob/main/articles/019c44f4-bc9c-7487-b398-712364c3c380/README.md
   "include": ["src"]
 }

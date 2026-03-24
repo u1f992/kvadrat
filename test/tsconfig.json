@@ -1,3 +1,4 @@
+// see https://github.com/u1f992/blog/blob/main/articles/019c44f4-bc9c-7487-b398-712364c3c380/README.md
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
