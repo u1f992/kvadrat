@@ -1,12 +1,12 @@
 # Kvadrat
 
-Vectorizes bitmap images by converting each pixel into polygons and merging regions with the same color.
+Vectorizes bitmap images using layered recursive decomposition with z-ordered rectangle output.
 
-|         Input         |         Output         |
-| :-------------------: | :--------------------: |
-| ![](./test/input.png) | ![](./test/output.svg) |
+|          Input          |          Output          |
+| :---------------------: | :----------------------: |
+| ![](./assets/input.png) | ![](./assets/output.svg) |
 
-The SVG conversion algorithm is based on [ygoe/qrcode-generator](https://github.com/ygoe/qrcode-generator/blob/985860d3e6c42b5d174132a4ecce4a8c0c88f88f/js/qrcode.js#L491-L668) (MIT License).
+Uses layered recursive decomposition: picks the most frequent color as background, paints the entire region, then recurses on remaining components. Layers are rendered back-to-front with z-ordering, eliminating subpixel gaps at color boundaries.
 
 <details>
 <summary>With optimizations</summary>
@@ -17,11 +17,13 @@ $ kvadrat --input input+dither-colors_64.png --output input+dither-colors_64.svg
 $ svgo input+dither-colors_64.svg -o output+dither-colors_64+svgo.svg
 ```
 
-|         Input         |                    Output                    |
-| :-------------------: | :------------------------------------------: |
-| ![](./test/input.png) | ![](./test/output+dither-colors_64+svgo.svg) |
+|          Input          |                     Output                     |
+| :---------------------: | :--------------------------------------------: |
+| ![](./assets/input.png) | ![](./assets/output+dither-colors_64+svgo.svg) |
 
 </details>
+
+The output may show grid-like artifacts or wrinkles at non-integer scale factors due to subpixel rounding in the renderer. This is inherent to vector representations of pixel data. Displaying at an integer multiple of the original pixel dimensions may help.
 
 ## Performance
 
@@ -29,9 +31,9 @@ $ svgo input+dither-colors_64.svg -o output+dither-colors_64+svgo.svg
 $ grep "model name" /proc/cpuinfo | head -1
 model name	: Intel(R) Core(TM) Ultra 7 155U
 
-$ time node dist/cli.js --input test/input.png --output test/output.svg
+$ time node dist/cli.js --input assets/input.png --output assets/output.svg
 
-real	0m0.75s
-user	0m1.85s
-sys	0m0.25s
+real	0m0.42s
+user	0m1.18s
+sys	0m0.16s
 ```

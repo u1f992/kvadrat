@@ -18,13 +18,18 @@ $(OUT_DIR)/core.js: $(C_SOURCES) $(CPP_SOURCES) $(HEADERS)
 	mkdir -p $(OUT_DIR)
 	em++ $(C_SOURCES) $(CPP_SOURCES) -o $@ $(EMFLAGS)
 
+debug: $(C_SOURCES) $(CPP_SOURCES) $(HEADERS)
+	mkdir -p $(OUT_DIR)
+	em++ $(C_SOURCES) $(CPP_SOURCES) -o $(OUT_DIR)/core.js $(EMFLAGS) -DCORE_DEBUG -g -O0
+
 format:
 	clang-format -i $(C_SOURCES) $(CPP_SOURCES) $(HEADERS)
 
 tidy:
 	clang-tidy $(C_SOURCES) -- -I.
+	@echo "Note: $(CPP_SOURCES) skipped (requires Emscripten include paths)"
 
 clean:
 	rm -rf $(OUT_DIR)
 
-.PHONY: all format tidy clean
+.PHONY: all debug format tidy clean

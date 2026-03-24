@@ -1,0 +1,30 @@
+# see https://docs.npmjs.com/trusted-publishers
+
+name: Publish Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm ci
+      - run: npm run build
+      # Tests use full hardware concurrency and are expensive on CI runners.
+      # Run locally before tagging.
+      # - run: npm test
+      - run: npm publish

@@ -1,4 +1,4 @@
-// @ts-ignore -- Emscripten-generated module, no .d.ts
+// @ts-expect-error -- Emscripten-generated module, no .d.ts
 import createModule from "./wasm/core.js";
 
 let wasmModule: Awaited<ReturnType<typeof createModule>>;
@@ -9,18 +9,22 @@ async function getModule() {
   return wasmModule;
 }
 
-type JimpImage = {
+/* ─── Types ───────────────────────────────────────────────────── */
+
+export type JimpImageCompat = {
   width: number;
   height: number;
   bitmap: { data: Buffer | Uint8Array | Uint8ClampedArray | number[] };
 };
 
-export type PerfResult = {
-  wasm: number;
-  render: number;
-  total: number;
-  colorCount: number;
+export type Rect = { x: number; y: number; w: number; h: number };
+
+export type Layer = {
+  color: number; // RGBA packed as uint32 (R high, A low)
+  rects: Rect[];
 };
+
+/* ─── Color helpers ──────────────────────────────────────────── */
 
 function rgbaToHex(rgba: number): string {
   return (
@@ -45,74 +49,6 @@ function rgbaToOpacity(rgba: number): number {
   return (rgba & 0xff) / 255;
 }
 
-function normalizePixels(
-  data: Buffer | Uint8Array | Uint8ClampedArray | number[],
-): Uint8Array {
-  if (data instanceof Uint8Array) return data;
-  return new Uint8Array(data);
-}
-
-async function processImage(
-  image: JimpImage,
-  mode: number,
-): Promise<{ rgba: number; polygons: Int32Array }[]> {
-  const wasm = await getModule();
-  const pixels = normalizePixels(image.bitmap.data);
-  const results = wasm.processImage(pixels, image.width, image.height, mode);
-  if (typeof results === "number" && results < 0) {
-    throw new Error(`wasm processImage failed: ${results}`);
-  }
-  return results;
-}
-
-function svgHeader(width: number, height: number): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`;
-}
-
-/* --- Polygon mode --- */
-
-function parseFlatPolygons(buf: Int32Array): [number, number][][] {
-  const polygons: [number, number][][] = [];
-  let pos = 0;
-  while (pos < buf.length) {
-    const pc = buf[pos]!;
-    pos++;
-    const polygon: [number, number][] = [];
-    for (let i = 0; i < pc; i++) {
-      polygon.push([buf[pos + i * 2]!, buf[pos + i * 2 + 1]!]);
-    }
-    pos += pc * 2;
-    polygons.push(polygon);
-  }
-  return polygons;
-}
-
-function generateSVGPathData(polygons: [number, number][][]): string {
-  return polygons
-    .map(
-      (polygon) =>
-        "M" +
-        polygon[0]![0] +
-        "," +
-        polygon[0]![1] +
-        polygon
-          .slice(1)
-          .map((point, j) =>
-            point[0] === polygon[j]![0]
-              ? "v" + (point[1] - polygon[j]![1])
-              : "h" + (point[0] - polygon[j]![0]),
-          )
-          .join("") +
-        "z",
-    )
-    .join("");
-}
-
-export type SVGOptions = {
-  fillOpacity?: boolean;
-  perf?: PerfResult;
-};
-
 function svgFillAttrs(rgba: number, fillOpacity: boolean): string {
   if (fillOpacity) {
     const opacity = rgbaToOpacity(rgba);
@@ -123,105 +59,131 @@ function svgFillAttrs(rgba: number, fillOpacity: boolean): string {
   return `fill="${rgbaToHex(rgba)}"`;
 }
 
-export async function toSVG(
-  image: JimpImage,
-  options: SVGOptions = {},
-): Promise<string> {
-  const { fillOpacity = true, perf } = options;
-  const t0 = performance.now();
-  const results = await processImage(image, 0);
-  const tWasm = performance.now();
-  let svg = svgHeader(image.width, image.height);
-  for (const { rgba, polygons } of results) {
-    const d = generateSVGPathData(parseFlatPolygons(polygons));
-    svg += `<path stroke="none" ${svgFillAttrs(rgba, fillOpacity)} d="${d}"/>`;
-  }
-  svg += "</svg>";
-  if (perf) {
-    const tDone = performance.now();
-    perf.wasm = tWasm - t0;
-    perf.render = tDone - tWasm;
-    perf.total = tDone - t0;
-    perf.colorCount = results.length;
-  }
-  return svg;
+/* ─── Layered decomposition (Wasm) ───────────────────────────── */
+
+function normalizePixels(
+  data: Buffer | Uint8Array | Uint8ClampedArray | number[],
+): Uint8Array {
+  if (data instanceof Uint8Array) return data;
+  return new Uint8Array(data);
 }
 
-/* --- Rectangle mode --- */
-
-export type Rect = { x: number; y: number; w: number; h: number };
-
-export type RectResult = {
-  color: string;
-  rects: Rect[];
-};
-
-function parseFlatRectangles(buf: Int32Array): Rect[] {
+function parseFlatRects(buf: Int32Array): Rect[] {
   const rects: Rect[] = [];
   for (let i = 0; i + 4 <= buf.length; i += 4) {
-    rects.push({
-      x: buf[i]!,
-      y: buf[i + 1]!,
-      w: buf[i + 2]!,
-      h: buf[i + 3]!,
-    });
+    rects.push({ x: buf[i]!, y: buf[i + 1]!, w: buf[i + 2]!, h: buf[i + 3]! });
   }
   return rects;
 }
 
-export async function toRectangles(image: JimpImage): Promise<RectResult[]> {
-  const results = await processImage(image, 1);
-  return results.map(({ rgba, polygons }) => ({
-    color: rgbaToHex(rgba),
-    rects: parseFlatRectangles(polygons),
-  }));
+export async function layeredDecompose(image: JimpImageCompat): Promise<{
+  layers: Layer[];
+}> {
+  const wasm = await getModule();
+  const pixels = normalizePixels(image.bitmap.data);
+  const results = wasm.processImage(
+    pixels,
+    image.width,
+    image.height,
+    navigator.hardwareConcurrency,
+  );
+  if (typeof results === "number" && results < 0) {
+    throw new Error(`wasm layered_decompose failed: ${results}`);
+  }
+  const layers: Layer[] = [];
+  for (const entry of results) {
+    layers.push({
+      color: entry.color,
+      rects: parseFlatRects(entry.rects),
+    });
+  }
+  return { layers };
 }
 
-export async function toRectSVG(
-  image: JimpImage,
+/* ─── Renderers ──────────────────────────────────────────────── */
+
+function svgHeader(width: number, height: number): string {
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg"` +
+    ` width="${width}" height="${height}"` +
+    ` viewBox="0 0 ${width} ${height}">`
+  );
+}
+
+export type SVGOptions = {
+  fillOpacity?: boolean;
+};
+
+export function renderAsSVGPolygon(
+  layers: Layer[],
+  width: number,
+  height: number,
   options: SVGOptions = {},
-): Promise<string> {
+): string {
   const { fillOpacity = true } = options;
-  const results = await processImage(image, 1);
-  let svg = svgHeader(image.width, image.height);
-  for (const { rgba, polygons } of results) {
-    const rects = parseFlatRectangles(polygons);
+  let svg = svgHeader(width, height);
+  for (const { color, rects } of layers) {
+    if (rects.length === 0) continue;
+    let d = "";
     for (const { x, y, w, h } of rects) {
-      svg += `<rect x="${x}" y="${y}" width="${w}" height="${h}" ${svgFillAttrs(rgba, fillOpacity)}/>`;
+      d += `M${x},${y}h${w}v${h}h${-w}z`;
+    }
+    svg += `<path ${svgFillAttrs(color, fillOpacity)} d="${d}"/>`;
+  }
+  svg += "</svg>";
+  return svg;
+}
+
+export function renderAsSVGRect(
+  layers: Layer[],
+  width: number,
+  height: number,
+  options: SVGOptions = {},
+): string {
+  const { fillOpacity = true } = options;
+  let svg = svgHeader(width, height);
+  for (const { color, rects } of layers) {
+    if (rects.length === 0) continue;
+    const fill = svgFillAttrs(color, fillOpacity);
+    for (const { x, y, w, h } of rects) {
+      svg += `<rect x="${x}" y="${y}" width="${w}" height="${h}" ${fill}/>`;
     }
   }
   svg += "</svg>";
   return svg;
 }
 
-/* --- CSS background mode --- */
-
 export type CSSBackgroundOptions = {
+  selector?: string;
   material?: "linear-gradient" | "svg";
 };
 
-export async function toCSSBackground(
-  image: JimpImage,
-  selector: string = ".image",
+export function renderAsCSSBackground(
+  layers: Layer[],
+  width: number,
+  height: number,
   options: CSSBackgroundOptions = {},
-): Promise<string> {
-  const { material = "linear-gradient" } = options;
-  const results = await toRectangles(image);
-  const layers: string[] = [];
-  for (const { color, rects } of results) {
+): string {
+  const { selector = ".image", material = "linear-gradient" } = options;
+  const bgs: string[] = [];
+
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const { color, rects } = layers[i]!;
+    if (rects.length === 0) continue;
+    const hex = rgbaToHex(color);
     for (const { x, y, w, h } of rects) {
       if (material === "svg") {
-        const encoded = color.replace(/#/g, "%23");
-        layers.push(
+        const encoded = hex.replace(/#/g, "%23");
+        bgs.push(
           `url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><rect fill='${encoded}' width='1' height='1'/></svg>") ${x}px ${y}px / ${w}px ${h}px no-repeat`,
         );
       } else {
-        layers.push(
-          `linear-gradient(${color},${color}) ${x}px ${y}px / ${w}px ${h}px no-repeat`,
+        bgs.push(
+          `linear-gradient(${hex},${hex}) ${x}px ${y}px / ${w}px ${h}px no-repeat`,
         );
       }
     }
   }
 
-  return `${selector} {\n  width: ${image.width}px;\n  height: ${image.height}px;\n  background:\n    ${layers.join(",\n    ")};\n}\n`;
+  return `${selector} {\n  width: ${width}px;\n  height: ${height}px;\n  background:\n    ${bgs.join(",\n    ")};\n}\n`;
 }

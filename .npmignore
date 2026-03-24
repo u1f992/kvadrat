@@ -1,0 +1,14 @@
+.clang-format
+.devcontainer/
+.github/
+.vrt-tmp/
+.vscode/
+assets/
+packages/
+scripts/
+src/
+test/
+wasm/
+eslint.config.ts
+prettier.config.ts
+tsconfig.json

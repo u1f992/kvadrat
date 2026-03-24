@@ -4,9 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>kvadrat</title>
+    <script src="coi-serviceworker.min.js"></script>
   </head>
   <body>
     <h1>kvadrat <small id="version"></small></h1>
+    <p>Vectorizes bitmap images using layered recursive decomposition with z-ordered rectangle output.</p>
+    <p>The output may show grid-like artifacts at non-integer scale factors due to subpixel rounding in the renderer. Displaying at an integer multiple of the original pixel dimensions may help.</p>
     <form id="form" onsubmit="return false">
       <div>
         <label for="file">Image:</label>
@@ -31,12 +34,21 @@
         <label for="selector">Selector:</label>
         <input type="text" id="selector" value=".image" disabled />
       </div>
+      <div>
+        <label><input type="checkbox" id="rgba" /> Use #RRGGBBAA instead of fill-opacity</label>
+      </div>
       <button type="submit" id="run">Run</button>
     </form>
+    <div id="info"></div>
     <div id="result"></div>
 
     <script type="module">
-      import { toSVG, toRectSVG, toCSSBackground } from "./index.js";
+      import {
+        layeredDecompose,
+        renderAsSVGPolygon,
+        renderAsSVGRect,
+        renderAsCSSBackground,
+      } from "./index.js";
       import { VERSION } from "./version.js";
 
       document.getElementById("version").textContent = "v" + VERSION;
@@ -49,11 +61,16 @@
       const runButton = document.getElementById("run");
       const result = document.getElementById("result");
 
-      modeSelect.addEventListener("change", () => {
+      const rgbaCheckbox = document.getElementById("rgba");
+
+      function updateDisabledState() {
         const isCss = modeSelect.value === "css-background";
         materialSelect.disabled = !isCss;
         selectorInput.disabled = !isCss;
-      });
+        rgbaCheckbox.disabled = isCss;
+      }
+      modeSelect.addEventListener("change", updateDisabledState);
+      updateDisabledState();
 
       function loadImage(file) {
         return new Promise((resolve, reject) => {
@@ -84,6 +101,7 @@
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
         result.innerHTML = "";
+        document.getElementById("info").textContent = "";
 
         const file = fileInput.files[0];
         if (!file) return;
@@ -91,39 +109,55 @@
         runButton.disabled = true;
         runButton.textContent = "Processing...";
         try {
+          const image = await loadImage(file);
+          const t0 = performance.now();
+          const { layers } = await layeredDecompose(image);
+          const dt = performance.now() - t0;
+          document.getElementById("info").textContent = `${image.width}x${image.height}, ${layers.length} layers, ${layers.reduce((s,l) => s + l.rects.length, 0)} rects, ${dt.toFixed(0)}ms`;
+          const mode = modeSelect.value;
 
-        const image = await loadImage(file);
-        const mode = modeSelect.value;
+          let preview, output;
 
-        if (mode === "css-background") {
-          const selector = selectorInput.value || ".image";
-          const material = materialSelect.value;
+          if (mode === "css-background") {
+            const selector = selectorInput.value || ".image";
+            const material = materialSelect.value;
+            preview = renderAsCSSBackground(
+              layers, image.width, image.height,
+              { selector: ".image", material },
+            );
+            output = renderAsCSSBackground(
+              layers, image.width, image.height,
+              { selector, material },
+            );
+          } else {
+            const svgOptions = { fillOpacity: !document.getElementById("rgba").checked };
+            output = mode === "rectangle"
+              ? renderAsSVGRect(layers, image.width, image.height, svgOptions)
+              : renderAsSVGPolygon(layers, image.width, image.height, svgOptions);
+            preview = output;
+          }
 
-          const [previewCss, css] = await Promise.all([
-            toCSSBackground(image, ".image", { material }),
-            toCSSBackground(image, selector, { material }),
-          ]);
+          // Preview
+          if (mode === "css-background") {
+            const style = document.createElement("style");
+            style.textContent = preview;
+            result.appendChild(style);
+            const div = document.createElement("div");
+            div.className = "image";
+            result.appendChild(div);
+          } else {
+            const div = document.createElement("div");
+            div.innerHTML = preview;
+            result.appendChild(div);
+          }
 
-          const style = document.createElement("style");
-          style.textContent = previewCss;
-          result.appendChild(style);
-          const div = document.createElement("div");
-          div.className = "image";
-          result.appendChild(div);
-
+          // Copyable text output
           const textarea = document.createElement("textarea");
-          textarea.value = css;
+          textarea.value = output;
           textarea.rows = 20;
           textarea.cols = 80;
           textarea.readOnly = true;
           result.appendChild(textarea);
-        } else {
-          const svg =
-            mode === "rectangle"
-              ? await toRectSVG(image)
-              : await toSVG(image);
-          result.innerHTML = svg;
-        }
         } finally {
           runButton.disabled = false;
           runButton.textContent = "Run";

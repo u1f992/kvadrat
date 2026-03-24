@@ -6,28 +6,40 @@
     "kvadrat": "dist/cli.js"
   },
   "scripts": {
-    "format": "prettier --write \"src/**/*.ts\"",
-    "build:wasm": "devcontainer exec --workspace-folder . make -C wasm",
-    "clean:wasm": "devcontainer exec --workspace-folder . make -C wasm clean",
-    "build:version": "node scripts/version.js",
-    "build": "npm run build:wasm && npm run build:version && npm run format && tsc && shx mkdir -p dist/wasm && shx cp src/wasm/core.js src/wasm/core.wasm dist/wasm/",
-    "test": "npm run build && node --test \"dist/**/*.test.js\""
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" && npm run format:wasm",
+    "lint": "eslint --flag unstable_native_nodejs_ts_config && npm run tidy:wasm",
+    "devcontainer:up": "devcontainer build --workspace-folder . && node -e \"try{require('child_process').execSync('devcontainer up --workspace-folder .',{timeout:10000,stdio:'inherit'})}catch{}\"",
+    "format:wasm": "npm run devcontainer:up && devcontainer exec --workspace-folder . make -C wasm format",
+    "tidy:wasm": "npm run devcontainer:up && devcontainer exec --workspace-folder . make -C wasm tidy",
+    "build:wasm": "npm run devcontainer:up && devcontainer exec --workspace-folder . make -C wasm",
+    "build:wasm:debug": "npm run devcontainer:up && devcontainer exec --workspace-folder . make -C wasm debug",
+    "clean:wasm": "npm run devcontainer:up && devcontainer exec --workspace-folder . make -C wasm clean",
+    "build:scripts": "tsc -p scripts/tsconfig.json --noEmit",
+    "build:version": "npm run build:scripts && node scripts/version.ts",
+    "build": "npm run build:wasm && npm run build:version && tsc && shx mkdir -p dist/wasm && shx cp src/wasm/core.js src/wasm/core.wasm dist/wasm/",
+    "build:test": "tsc -p test/tsconfig.json --noEmit",
+    "test": "npm run build:wasm && npm run build:test && node --test \"test/**/*.test.ts\""
   },
   "keywords": [],
   "homepage": "https://github.com/u1f992/kvadrat",
   "author": "Koutaro Mukai",
   "license": "MIT",
-  "description": "Vectorizes bitmap images by converting each pixel into polygons and merging regions with the same color.",
+  "description": "Vectorizes bitmap images using layered recursive decomposition with z-ordered rectangle output.",
   "type": "module",
   "dependencies": {
     "jimp": "^1.6.0"
   },
+  "//": "typescript-eslint: install with --legacy-peer-deps (peer typescript <6.0.0)",
   "devDependencies": {
     "@devcontainers/cli": "^0.84.1",
-    "@types/node": "^22.13.1",
-    "prettier": "^3.4.2",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.19.15",
+    "eslint": "^10.1.0",
+    "globals": "^17.4.0",
+    "prettier": "^3.8.1",
     "puppeteer": "^24.40.0",
     "shx": "^0.4.0",
-    "typescript": "^5.7.3"
+    "typescript": "^6.0.2",
+    "typescript-eslint": "^8.57.2"
   }
 }
