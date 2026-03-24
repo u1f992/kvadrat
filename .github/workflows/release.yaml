@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     env:
       VERSION: ${{ github.ref_name }}
     steps:
