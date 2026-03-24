@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>kvadrat</title>
+    <script src="coi-serviceworker.min.js"></script>
   </head>
   <body>
     <h1>kvadrat <small id="version"></small></h1>
@@ -36,7 +37,12 @@
     <div id="result"></div>
 
     <script type="module">
-      import { toSVG, toRectSVG, toCSSBackground } from "./index.js";
+      import {
+        layeredDecompose,
+        renderAsSVGPolygon,
+        renderAsSVGRect,
+        renderAsCSSBackground,
+      } from "./index.js";
       import { VERSION } from "./version.js";
 
       document.getElementById("version").textContent = "v" + VERSION;
@@ -91,39 +97,43 @@
         runButton.disabled = true;
         runButton.textContent = "Processing...";
         try {
+          const image = await loadImage(file);
+          const { layers } = layeredDecompose(image);
+          const mode = modeSelect.value;
 
-        const image = await loadImage(file);
-        const mode = modeSelect.value;
+          if (mode === "css-background") {
+            const selector = selectorInput.value || ".image";
+            const material = materialSelect.value;
 
-        if (mode === "css-background") {
-          const selector = selectorInput.value || ".image";
-          const material = materialSelect.value;
+            const previewCss = renderAsCSSBackground(
+              layers, image.width, image.height,
+              { selector: ".image", material },
+            );
+            const css = renderAsCSSBackground(
+              layers, image.width, image.height,
+              { selector, material },
+            );
 
-          const [previewCss, css] = await Promise.all([
-            toCSSBackground(image, ".image", { material }),
-            toCSSBackground(image, selector, { material }),
-          ]);
+            const style = document.createElement("style");
+            style.textContent = previewCss;
+            result.appendChild(style);
+            const div = document.createElement("div");
+            div.className = "image";
+            result.appendChild(div);
 
-          const style = document.createElement("style");
-          style.textContent = previewCss;
-          result.appendChild(style);
-          const div = document.createElement("div");
-          div.className = "image";
-          result.appendChild(div);
-
-          const textarea = document.createElement("textarea");
-          textarea.value = css;
-          textarea.rows = 20;
-          textarea.cols = 80;
-          textarea.readOnly = true;
-          result.appendChild(textarea);
-        } else {
-          const svg =
-            mode === "rectangle"
-              ? await toRectSVG(image)
-              : await toSVG(image);
-          result.innerHTML = svg;
-        }
+            const textarea = document.createElement("textarea");
+            textarea.value = css;
+            textarea.rows = 20;
+            textarea.cols = 80;
+            textarea.readOnly = true;
+            result.appendChild(textarea);
+          } else {
+            const svg =
+              mode === "rectangle"
+                ? renderAsSVGRect(layers, image.width, image.height)
+                : renderAsSVGPolygon(layers, image.width, image.height);
+            result.innerHTML = svg;
+          }
         } finally {
           runButton.disabled = false;
           runButton.textContent = "Run";
