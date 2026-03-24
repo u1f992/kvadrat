@@ -1,6 +1,6 @@
 # Kvadrat
 
-Vectorizes bitmap images by converting each pixel into polygons and merging regions with the same color.
+Vectorizes bitmap images using layered recursive decomposition with z-ordered rectangle output.
 
 |         Input         |         Output         |
 | :-------------------: | :--------------------: |

@@ -22,7 +22,7 @@
   "homepage": "https://github.com/u1f992/kvadrat",
   "author": "Koutaro Mukai",
   "license": "MIT",
-  "description": "Vectorizes bitmap images by converting each pixel into polygons and merging regions with the same color.",
+  "description": "Vectorizes bitmap images using layered recursive decomposition with z-ordered rectangle output.",
   "type": "module",
   "dependencies": {
     "jimp": "^1.6.0"

@@ -403,6 +403,8 @@ static int32_t *choose_region(const int32_t *comp_idx, int32_t comp_len,
           for (int32_t x = bx0; x <= bx1; x++)
             r[n++] = y * width + x;
         *out_len = n;
+      } else {
+        *out_len = 0;
       }
       free(comp_bm);
       return r;
@@ -704,6 +706,13 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
             (nc2 > 0) ? (IVec *)malloc((size_t)nc2 * sizeof(IVec)) : NULL;
         IVec *crects =
             (nc2 > 0) ? (IVec *)malloc((size_t)nc2 * sizeof(IVec)) : NULL;
+        if (nc2 > 0 && (!cpx || !crects)) {
+          free(cpx);
+          free(crects);
+          for (int32_t i = 0; i < nc2; i++)
+            freq_seen[freq_color[i]] = 0;
+          continue;
+        }
         for (int32_t i = 0; i < nc2; i++) {
           iv_init(&cpx[i]);
           iv_init(&crects[i]);
@@ -727,11 +736,17 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
               (FlatWorker *)malloc((size_t)nt * sizeof(FlatWorker));
           pthread_t *threads =
               (pthread_t *)malloc((size_t)nt * sizeof(pthread_t));
+          if (!workers || !threads) {
+            free(workers);
+            free(threads);
+            workers = NULL;
+            threads = NULL;
+          }
 
-          int32_t per = nc2 / nt;
-          int32_t rem = nc2 % nt;
+          int32_t per = workers ? nc2 / nt : 0;
+          int32_t rem = workers ? nc2 % nt : 0;
           int32_t start = 0;
-          for (int32_t t = 0; t < nt; t++) {
+          for (int32_t t = 0; workers && t < nt; t++) {
             int32_t count = per + (t < rem ? 1 : 0);
             workers[t].color_pixels = cpx;
             workers[t].results = crects;
@@ -743,7 +758,7 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
             pthread_create(&threads[t], NULL, flat_worker, &workers[t]);
             start += count;
           }
-          for (int32_t t = 0; t < nt; t++)
+          for (int32_t t = 0; workers && t < nt; t++)
             pthread_join(threads[t], NULL);
 
           free(workers);
