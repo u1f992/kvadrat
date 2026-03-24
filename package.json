@@ -16,7 +16,7 @@
     "build:version": "npm run build:scripts && node scripts/version.ts",
     "build": "npm run build:wasm && npm run build:version && tsc && shx mkdir -p dist/wasm && shx cp src/wasm/core.js src/wasm/core.wasm dist/wasm/",
     "build:test": "tsc -p test/tsconfig.json --noEmit",
-    "test": "npm run build && npm run build:test && node --test \"test/**/*.test.ts\""
+    "test": "npm run build:wasm && npm run build:test && node --test \"test/**/*.test.ts\""
   },
   "keywords": [],
   "homepage": "https://github.com/u1f992/kvadrat",
