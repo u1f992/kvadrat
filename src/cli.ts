@@ -9,8 +9,8 @@ import {
   renderAsSVGPolygon,
   renderAsSVGRect,
   renderAsCSSBackground,
-} from "./index.js";
-import { VERSION } from "./version.js";
+} from "./index.ts";
+import { VERSION } from "./version.ts";
 
 const {
   input,

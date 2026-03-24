@@ -16,7 +16,7 @@
     "build:version": "npm run build:scripts && node scripts/version.ts",
     "build": "npm run build:wasm && npm run build:version && tsc && shx mkdir -p dist/wasm && shx cp src/wasm/core.js src/wasm/core.wasm dist/wasm/",
     "build:test": "tsc -p test/tsconfig.json --noEmit",
-    "test": "npm run build:test && node --test \"test/**/*.test.ts\""
+    "test": "npm run build && npm run build:test && node --test \"test/**/*.test.ts\""
   },
   "keywords": [],
   "homepage": "https://github.com/u1f992/kvadrat",
@@ -29,10 +29,10 @@
   },
   "devDependencies": {
     "@devcontainers/cli": "^0.84.1",
-    "@types/node": "^22.13.1",
-    "prettier": "^3.4.2",
+    "@types/node": "^22.19.15",
+    "prettier": "^3.8.1",
     "puppeteer": "^24.40.0",
     "shx": "^0.4.0",
-    "typescript": "^5.7.3"
+    "typescript": "^6.0.2"
   }
 }
