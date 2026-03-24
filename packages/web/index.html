@@ -32,6 +32,9 @@
         <label for="selector">Selector:</label>
         <input type="text" id="selector" value=".image" disabled />
       </div>
+      <div>
+        <label><input type="checkbox" id="rgba" /> Use #RRGGBBAA instead of fill-opacity</label>
+      </div>
       <button type="submit" id="run">Run</button>
     </form>
     <div id="info"></div>
@@ -56,11 +59,16 @@
       const runButton = document.getElementById("run");
       const result = document.getElementById("result");
 
-      modeSelect.addEventListener("change", () => {
+      const rgbaCheckbox = document.getElementById("rgba");
+
+      function updateDisabledState() {
         const isCss = modeSelect.value === "css-background";
         materialSelect.disabled = !isCss;
         selectorInput.disabled = !isCss;
-      });
+        rgbaCheckbox.disabled = isCss;
+      }
+      modeSelect.addEventListener("change", updateDisabledState);
+      updateDisabledState();
 
       function loadImage(file) {
         return new Promise((resolve, reject) => {
@@ -133,10 +141,11 @@
             textarea.readOnly = true;
             result.appendChild(textarea);
           } else {
+            const svgOptions = { fillOpacity: !document.getElementById("rgba").checked };
             const svg =
               mode === "rectangle"
-                ? renderAsSVGRect(layers, image.width, image.height)
-                : renderAsSVGPolygon(layers, image.width, image.height);
+                ? renderAsSVGRect(layers, image.width, image.height, svgOptions)
+                : renderAsSVGPolygon(layers, image.width, image.height, svgOptions);
             const div = document.createElement("div");
             div.innerHTML = svg;
             result.appendChild(div);
