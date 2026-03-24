@@ -6,7 +6,8 @@
     "kvadrat": "dist/cli.js"
   },
   "scripts": {
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" && npm run format:wasm",
+    "lint": "eslint --flag unstable_native_nodejs_ts_config && npm run tidy:wasm",
     "devcontainer:up": "devcontainer build --workspace-folder . && node -e \"try{require('child_process').execSync('devcontainer up --workspace-folder .',{timeout:10000,stdio:'inherit'})}catch{}\"",
     "format:wasm": "npm run devcontainer:up && devcontainer exec --workspace-folder . make -C wasm format",
     "tidy:wasm": "npm run devcontainer:up && devcontainer exec --workspace-folder . make -C wasm tidy",
@@ -28,12 +29,17 @@
   "dependencies": {
     "jimp": "^1.6.0"
   },
+  "//": "typescript-eslint: install with --legacy-peer-deps (peer typescript <6.0.0)",
   "devDependencies": {
     "@devcontainers/cli": "^0.84.1",
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.19.15",
+    "eslint": "^10.1.0",
+    "globals": "^17.4.0",
     "prettier": "^3.8.1",
     "puppeteer": "^24.40.0",
     "shx": "^0.4.0",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.2",
+    "typescript-eslint": "^8.57.2"
   }
 }

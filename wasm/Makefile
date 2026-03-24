@@ -32,4 +32,4 @@ tidy:
 clean:
 	rm -rf $(OUT_DIR)
 
-.PHONY: all format tidy clean
+.PHONY: all debug format tidy clean

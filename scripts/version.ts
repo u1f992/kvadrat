@@ -21,5 +21,5 @@ if (dirty) {
 }
 
 const full = version + suffix;
-writeFileSync("src/version.ts", `export const VERSION = '${full}'`, "utf-8");
+writeFileSync("src/version.ts", `export const VERSION = '${full}'\n`, "utf-8");
 console.log(full);

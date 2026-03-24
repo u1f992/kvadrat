@@ -10,7 +10,11 @@ import {
   renderAsSVGRect,
   renderAsCSSBackground,
 } from "../src/index.ts";
-import type { JimpImageCompat, Layer } from "../src/index.ts";
+import type {
+  JimpImageCompat,
+  Layer,
+  CSSBackgroundOptions,
+} from "../src/index.ts";
 
 let browser: Browser;
 
@@ -92,15 +96,9 @@ async function assertPixelPerfect(
   return { rects: nRects, layers: layers.length };
 }
 
-async function loadImage(): Promise<
-  JimpImageCompat & {
-    getPixelColor(x: number, y: number): number;
-    clone(): any;
-    crop(opts: { x: number; y: number; w: number; h: number }): any;
-  }
-> {
+async function loadImage() {
   const inputPath = path.join(import.meta.dirname, "..", "assets", "input.png");
-  return Jimp.read(inputPath) as any;
+  return Jimp.read(inputPath);
 }
 
 /* ─── Tests ──────────────────────────────────────────────────── */
@@ -111,13 +109,13 @@ const renderers: [string, Renderer, "svg" | "css", Record<string, unknown>?][] =
     ["rect", renderAsSVGRect as Renderer, "svg"],
     [
       "css-gradient",
-      (l, w, h, o) => renderAsCSSBackground(l, w, h, o as any),
+      (l, w, h, o) => renderAsCSSBackground(l, w, h, o as CSSBackgroundOptions),
       "css",
       { selector: ".image", material: "linear-gradient" },
     ],
     [
       "css-svg",
-      (l, w, h, o) => renderAsCSSBackground(l, w, h, o as any),
+      (l, w, h, o) => renderAsCSSBackground(l, w, h, o as CSSBackgroundOptions),
       "css",
       { selector: ".image", material: "svg" },
     ],

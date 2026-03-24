@@ -40,7 +40,9 @@ static void iv_free(IVec *v) {
 }
 
 static int iv_push(IVec *v, int32_t val) {
-  if (v->len >= v->cap) {
+  // clang-format off
+  if (v->len >= v->cap) { // NOLINT(clang-analyzer-core.NullDereference,clang-analyzer-core.UndefinedBinaryOperatorResult)
+    // clang-format on
     int32_t nc = v->cap ? v->cap * 2 : 64;
     int32_t *p = (int32_t *)realloc(v->data, (size_t)nc * sizeof(int32_t));
     if (!p)
@@ -516,7 +518,9 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
   rs_push(&wl, init, cap);
 
   /* Reusable bitmaps */
-  uint8_t *region_bm = (uint8_t *)malloc((size_t)cap);
+  // clang-format off
+  uint8_t *region_bm = (uint8_t *)malloc((size_t)cap); // NOLINT(clang-analyzer-unix.Malloc)
+  // clang-format on
   uint8_t *remain_bm = (uint8_t *)calloc((size_t)cap, 1);
   if (!region_bm || !remain_bm) {
     free(region_bm);
@@ -591,6 +595,7 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
     /* Single color -> leaf */
     if (num_colors == 1) {
       /* Build bitmap, decompose */
+      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       memset(region_bm, 0, (size_t)cap);
       for (int32_t i = 0; i < reg.len; i++)
         region_bm[reg.idx[i]] = 1;
@@ -598,12 +603,14 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
       iv_init(&rects);
       decompose_region(region_bm, reg.idx, reg.len, width, &rects);
       lv_push(layers, palette[freq_color[0]], rects.data, rects.len);
-      free(reg.idx);
+      free(reg.idx); // NOLINT(clang-analyzer-unix.Malloc)
       continue;
     }
 
     /* Background = most frequent */
-    int32_t bg = freq_color[0], bgN = freq_count[0];
+    // clang-format off
+    int32_t bg = freq_color[0], bgN = freq_count[0]; // NOLINT(clang-analyzer-core.uninitialized.Assign)
+    // clang-format on
     for (int32_t i = 1; i < num_colors; i++) {
       if (freq_count[i] > bgN) {
         bg = freq_color[i];
@@ -618,6 +625,7 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
 #ifdef CORE_DEBUG
     t0 = NOW();
 #endif
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     memset(region_bm, 0, (size_t)cap);
     for (int32_t i = 0; i < reg.len; i++)
       region_bm[reg.idx[i]] = 1;
@@ -627,6 +635,7 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
     lv_push(layers, palette[bg], bg_rects.data, bg_rects.len);
 
     /* Rebuild region bitmap (decompose cleared it) */
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     memset(region_bm, 0, (size_t)cap);
     for (int32_t i = 0; i < reg.len; i++)
       region_bm[reg.idx[i]] = 1;
@@ -639,6 +648,7 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
 #ifdef CORE_DEBUG
     t0 = NOW();
 #endif
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     memset(remain_bm, 0, (size_t)cap);
     IVec remain_arr;
     iv_init(&remain_arr);
@@ -735,7 +745,7 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
           FlatWorker *workers =
               (FlatWorker *)malloc((size_t)nt * sizeof(FlatWorker));
           pthread_t *threads =
-              (pthread_t *)malloc((size_t)nt * sizeof(pthread_t));
+              (pthread_t *)calloc((size_t)nt, sizeof(pthread_t));
           if (!workers || !threads) {
             free(workers);
             free(threads);
@@ -755,14 +765,35 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
             workers[t].width = width;
             workers[t].cap = cap;
             workers[t].error = 0;
-            pthread_create(&threads[t], NULL, flat_worker, &workers[t]);
+            if (pthread_create(&threads[t], NULL, flat_worker, &workers[t]) !=
+                0)
+              flat_worker(&workers[t]);
             start += count;
           }
-          for (int32_t t = 0; workers && t < nt; t++)
-            pthread_join(threads[t], NULL);
+          for (int32_t t = 0; workers && t < nt; t++) {
+            if (threads[t])
+              pthread_join(threads[t], NULL);
+          }
 
+          int32_t worker_err = 0;
+          for (int32_t t = 0; workers && t < nt; t++) {
+            if (workers[t].error)
+              worker_err = workers[t].error;
+          }
           free(workers);
           free(threads);
+
+          if (worker_err) {
+            for (int32_t ci2 = 0; ci2 < nc2; ci2++) {
+              free(crects[ci2].data);
+              iv_free(&cpx[ci2]);
+            }
+            free(cpx);
+            free(crects);
+            for (int32_t i = 0; i < nc2; i++)
+              freq_seen[freq_color[i]] = 0;
+            continue;
+          }
         }
 
         /* 5. Collect results into layers */

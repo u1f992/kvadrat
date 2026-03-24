@@ -51,11 +51,7 @@ function renderLayers(
 }
 
 /** Build expected pixel array from color index grid + palette. */
-function expectedPixels(
-  grid: number[],
-  palette: number[][],
-  width: number,
-): number[] {
+function expectedPixels(grid: number[], palette: number[][]): number[] {
   return grid.map((c) => {
     const p = palette[c]!;
     return rgba(p[0]!, p[1]!, p[2]!, p[3]!);
@@ -74,7 +70,7 @@ describe("layeredDecompose", () => {
     const img = makeImage(2, 2, [O, O, O, O]);
     const { layers } = await layeredDecompose(img);
     assert.equal(totalRects(layers), 1);
-    const expected = expectedPixels([0, 0, 0, 0], [O], 2);
+    const expected = expectedPixels([0, 0, 0, 0], [O]);
     assert.deepEqual(renderLayers(layers, 2, 2), expected);
   });
 
@@ -85,7 +81,7 @@ describe("layeredDecompose", () => {
     const img = makeImage(3, 3, [O, O, R, O, O, O, O, O, O]);
     const { layers } = await layeredDecompose(img);
     assert.equal(totalRects(layers), 2);
-    const expected = expectedPixels([0, 0, 1, 0, 0, 0, 0, 0, 0], [O, R], 3);
+    const expected = expectedPixels([0, 0, 1, 0, 0, 0, 0, 0, 0], [O, R]);
     assert.deepEqual(renderLayers(layers, 3, 3), expected);
   });
 
@@ -196,7 +192,7 @@ describe("layeredDecompose", () => {
     // O O O
     const img = makeImage(3, 2, [O, R, G, O, O, O]);
     const { layers } = await layeredDecompose(img);
-    const expected = expectedPixels([0, 1, 2, 0, 0, 0], [O, R, G], 3);
+    const expected = expectedPixels([0, 1, 2, 0, 0, 0], [O, R, G]);
     assert.deepEqual(renderLayers(layers, 3, 2), expected);
   });
 });

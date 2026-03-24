@@ -8,7 +8,7 @@ using emscripten::val;
 
 val processImage(val pixelsVal, int32_t width, int32_t height,
                  int32_t numThreads) {
-  if (width <= 0 || height <= 0)
+  if (width <= 0 || height <= 0 || (int64_t)width * height > INT32_MAX)
     return val(CORE_ERROR_ALLOC);
 
   std::vector<uint8_t> pixels =

@@ -1,4 +1,4 @@
-// @ts-ignore -- Emscripten-generated module, no .d.ts
+// @ts-expect-error -- Emscripten-generated module, no .d.ts
 import createModule from "./wasm/core.js";
 
 let wasmModule: Awaited<ReturnType<typeof createModule>>;
