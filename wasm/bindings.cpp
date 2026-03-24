@@ -6,7 +6,8 @@
 
 using emscripten::val;
 
-val processImage(val pixelsVal, int32_t width, int32_t height) {
+val processImage(val pixelsVal, int32_t width, int32_t height,
+                 int32_t numThreads) {
   if (width <= 0 || height <= 0)
     return val(CORE_ERROR_ALLOC);
 
@@ -14,7 +15,8 @@ val processImage(val pixelsVal, int32_t width, int32_t height) {
       emscripten::convertJSArrayToNumberVector<uint8_t>(pixelsVal);
 
   LayerResult *layers = nullptr;
-  int32_t numLayers = layered_decompose(pixels.data(), width, height, &layers);
+  int32_t numLayers =
+      layered_decompose(pixels.data(), width, height, numThreads, &layers);
   if (numLayers < 0)
     return val(numLayers);
 

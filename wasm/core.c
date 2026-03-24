@@ -3,11 +3,24 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/threading.h>
+#endif
+#include <pthread.h>
+
 #ifdef CORE_DEBUG
 #include <stdio.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#define NOW() emscripten_get_now()
+#else
+#include <time.h>
+#define NOW() ((double)clock() / CLOCKS_PER_SEC * 1000.0)
+#endif
 #define DBG(...) fprintf(stderr, __VA_ARGS__)
 #else
 #define DBG(...)
+#define NOW() 0.0
 #endif
 
 
@@ -411,11 +424,36 @@ static void decompose_region(uint8_t *region_bm, const int32_t *region_idx,
   }
 }
 
+/* ── Parallel flat decomposition ─────────────────────────────── */
+
+typedef struct {
+  const IVec *color_pixels; /* per-color pixel index arrays */
+  IVec *results;            /* per-color rect output */
+  int32_t start, end;       /* color range [start, end) */
+  int32_t width, cap;
+  int32_t error;
+} FlatWorker;
+
+static void *flat_worker(void *arg) {
+  FlatWorker *w = (FlatWorker *)arg;
+  w->error = 0;
+  for (int32_t ci = w->start; ci < w->end; ci++) {
+    const IVec *px = &w->color_pixels[ci];
+    uint8_t *bm = (uint8_t *)calloc((size_t)w->cap, 1);
+    if (!bm) { w->error = CORE_ERROR_ALLOC; return NULL; }
+    for (int32_t i = 0; i < px->len; i++) bm[px->data[i]] = 1;
+    iv_init(&w->results[ci]);
+    decompose_region(bm, px->data, px->len, w->width, &w->results[ci]);
+    free(bm);
+  }
+  return NULL;
+}
+
 /* ── solve (iterative worklist) ──────────────────────────────── */
 
 static int32_t solve(const int32_t *pixels, const uint32_t *palette,
                      int32_t width, int32_t height, int32_t cap,
-                     LVec *layers) {
+                     int32_t num_threads, LVec *layers) {
   /* Initial region = all pixels */
   int32_t *init = (int32_t *)malloc((size_t)cap * sizeof(int32_t));
   if (!init) return CORE_ERROR_ALLOC;
@@ -447,11 +485,24 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
     return CORE_ERROR_ALLOC;
   }
 
+#ifdef CORE_DEBUG
+  double t_freq = 0, t_decompose = 0, t_remain = 0;
+  double t_components = 0, t_choose = 0, t_flat = 0;
+  int32_t iterations = 0, flat_count = 0;
+  double t0, t1;
+#endif
+
   while (wl.len > 0) {
+#ifdef CORE_DEBUG
+    iterations++;
+#endif
     Region reg = rs_pop(&wl);
     if (reg.len == 0) { free(reg.idx); continue; }
 
     /* Count colors */
+#ifdef CORE_DEBUG
+    t0 = NOW();
+#endif
     int32_t num_colors = 0;
     for (int32_t i = 0; i < reg.len; i++) {
       int32_t c = pixels[reg.idx[i]];
@@ -473,6 +524,10 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
     /* Clean up freq_seen */
     for (int32_t i = 0; i < num_colors; i++)
       freq_seen[freq_color[i]] = 0;
+
+#ifdef CORE_DEBUG
+    t1 = NOW(); t_freq += t1 - t0;
+#endif
 
     /* Single color -> leaf */
     if (num_colors == 1) {
@@ -496,6 +551,9 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
         reg.len, num_colors, bg, bgN);
 
     /* Build region bitmap, decompose bg layer */
+#ifdef CORE_DEBUG
+    t0 = NOW();
+#endif
     memset(region_bm, 0, (size_t)cap);
     for (int32_t i = 0; i < reg.len; i++) region_bm[reg.idx[i]] = 1;
     IVec bg_rects; iv_init(&bg_rects);
@@ -505,8 +563,14 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
     /* Rebuild region bitmap (decompose cleared it) */
     memset(region_bm, 0, (size_t)cap);
     for (int32_t i = 0; i < reg.len; i++) region_bm[reg.idx[i]] = 1;
+#ifdef CORE_DEBUG
+    t1 = NOW(); t_decompose += t1 - t0;
+#endif
 
     /* Build remaining */
+#ifdef CORE_DEBUG
+    t0 = NOW();
+#endif
     memset(remain_bm, 0, (size_t)cap);
     IVec remain_arr; iv_init(&remain_arr);
     for (int32_t i = 0; i < reg.len; i++) {
@@ -515,27 +579,46 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
         iv_push(&remain_arr, reg.idx[i]);
       }
     }
+#ifdef CORE_DEBUG
+    t1 = NOW(); t_remain += t1 - t0;
+#endif
 
     /* Find components */
+#ifdef CORE_DEBUG
+    t0 = NOW();
+#endif
     CompList cl = find_components(remain_bm, remain_arr.data, remain_arr.len,
                                  width, height, cap);
     iv_free(&remain_arr);
+#ifdef CORE_DEBUG
+    t1 = NOW(); t_components += t1 - t0;
+#endif
 
     /* Process components in reverse */
     for (int32_t ci = cl.count - 1; ci >= 0; ci--) {
       IVec *comp = &cl.comps[ci];
       int32_t sub_len;
+#ifdef CORE_DEBUG
+      t0 = NOW();
+#endif
       int32_t *sub = choose_region(comp->data, comp->len, region_bm,
                                    reg.len, bg, pixels, width, height,
                                    &sub_len);
+#ifdef CORE_DEBUG
+      t1 = NOW(); t_choose += t1 - t0;
+#endif
       DBG("  comp[%d] len=%d -> choose_region: sub=%p sub_len=%d\n",
           ci, comp->len, (void *)sub, sub_len);
       if (sub) {
         rs_push(&wl, sub, sub_len);
       } else {
         DBG("  FLAT FALLBACK for comp len=%d\n", comp->len);
-        /* Flat per-color fallback */
-        /* Group by color using freq arrays */
+#ifdef CORE_DEBUG
+        t0 = NOW();
+        flat_count++;
+#endif
+
+        /* 1. Discover colors */
         int32_t nc2 = 0;
         for (int32_t i = 0; i < comp->len; i++) {
           int32_t c = pixels[comp->data[i]];
@@ -544,29 +627,65 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
             freq_color[nc2++] = c;
           }
         }
+        /* 2. Map color -> slot for grouping */
+        for (int32_t i = 0; i < nc2; i++)
+          freq_seen[freq_color[i]] = i;
+
+        /* 3. Group pixels by color */
+        IVec *cpx = (IVec *)malloc((size_t)nc2 * sizeof(IVec));
+        IVec *crects = (IVec *)malloc((size_t)nc2 * sizeof(IVec));
+        for (int32_t i = 0; i < nc2; i++) { iv_init(&cpx[i]); iv_init(&crects[i]); }
+        for (int32_t i = 0; i < comp->len; i++) {
+          int32_t slot = freq_seen[pixels[comp->data[i]]];
+          iv_push(&cpx[slot], comp->data[i]);
+        }
         for (int32_t i = 0; i < nc2; i++)
           freq_seen[freq_color[i]] = 0;
 
-        for (int32_t ci2 = 0; ci2 < nc2; ci2++) {
-          int32_t color = freq_color[ci2];
-          /* Collect pixels of this color, build bitmap, decompose */
-          IVec px_arr; iv_init(&px_arr);
-          for (int32_t i = 0; i < comp->len; i++) {
-            if (pixels[comp->data[i]] == color)
-              iv_push(&px_arr, comp->data[i]);
+        /* 4. Parallel decompose per color */
+        {
+          int32_t nt = num_threads;
+          if (nt > nc2) nt = nc2;
+          if (nt < 1) nt = 1;
+
+          FlatWorker *workers = (FlatWorker *)malloc(
+              (size_t)nt * sizeof(FlatWorker));
+          pthread_t *threads = (pthread_t *)malloc(
+              (size_t)nt * sizeof(pthread_t));
+
+          int32_t per = nc2 / nt;
+          int32_t rem = nc2 % nt;
+          int32_t start = 0;
+          for (int32_t t = 0; t < nt; t++) {
+            int32_t count = per + (t < rem ? 1 : 0);
+            workers[t].color_pixels = cpx;
+            workers[t].results = crects;
+            workers[t].start = start;
+            workers[t].end = start + count;
+            workers[t].width = width;
+            workers[t].cap = cap;
+            workers[t].error = 0;
+            pthread_create(&threads[t], NULL, flat_worker, &workers[t]);
+            start += count;
           }
-          uint8_t *tmp_bm = (uint8_t *)calloc((size_t)cap, 1);
-          if (tmp_bm) {
-            for (int32_t i = 0; i < px_arr.len; i++)
-              tmp_bm[px_arr.data[i]] = 1;
-            IVec flat_rects; iv_init(&flat_rects);
-            decompose_region(tmp_bm, px_arr.data, px_arr.len, width,
-                             &flat_rects);
-            lv_push(layers, palette[color], flat_rects.data, flat_rects.len);
-            free(tmp_bm);
-          }
-          iv_free(&px_arr);
+          for (int32_t t = 0; t < nt; t++)
+            pthread_join(threads[t], NULL);
+
+          free(workers);
+          free(threads);
         }
+
+        /* 5. Collect results into layers */
+        for (int32_t ci2 = 0; ci2 < nc2; ci2++) {
+          lv_push(layers, palette[freq_color[ci2]],
+                  crects[ci2].data, crects[ci2].len);
+          iv_free(&cpx[ci2]);
+        }
+        free(cpx);
+        free(crects);
+#ifdef CORE_DEBUG
+        t1 = NOW(); t_flat += t1 - t0;
+#endif
       }
     }
 
@@ -576,6 +695,19 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
     free(cl.comps);
     free(reg.idx);
   }
+
+  DBG("\n=== solve profile ===\n");
+  DBG("iterations: %d, flat_fallbacks: %d, layers: %d\n",
+      iterations, flat_count, layers->len);
+  DBG("freq:       %7.1fms\n", t_freq);
+  DBG("decompose:  %7.1fms\n", t_decompose);
+  DBG("remain:     %7.1fms\n", t_remain);
+  DBG("components: %7.1fms\n", t_components);
+  DBG("choose:     %7.1fms\n", t_choose);
+  DBG("flat:       %7.1fms\n", t_flat);
+  DBG("total:      %7.1fms\n",
+      t_freq + t_decompose + t_remain + t_components + t_choose + t_flat);
+  DBG("====================\n");
 
   free(region_bm);
   free(remain_bm);
@@ -589,7 +721,7 @@ static int32_t solve(const int32_t *pixels, const uint32_t *palette,
 /* ── Main entry ──────────────────────────────────────────────── */
 
 int32_t layered_decompose(const uint8_t *pixels, int32_t width, int32_t height,
-                          LayerResult **out_layers) {
+                          int32_t num_threads, LayerResult **out_layers) {
   int32_t cap = width * height;
 
   uint32_t *palette = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
@@ -610,7 +742,7 @@ int32_t layered_decompose(const uint8_t *pixels, int32_t width, int32_t height,
   LVec layers;
   lv_init(&layers);
 
-  int32_t err = solve(indexed, palette, width, height, cap, &layers);
+  int32_t err = solve(indexed, palette, width, height, cap, num_threads, &layers);
   free(palette);
   free(indexed);
 

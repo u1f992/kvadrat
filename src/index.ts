@@ -81,7 +81,12 @@ export async function layeredDecompose(image: JimpImageCompat): Promise<{
 }> {
   const wasm = await getModule();
   const pixels = normalizePixels(image.bitmap.data);
-  const results = wasm.processImage(pixels, image.width, image.height);
+  const results = wasm.processImage(
+    pixels,
+    image.width,
+    image.height,
+    navigator.hardwareConcurrency,
+  );
   if (typeof results === "number" && results < 0) {
     throw new Error(`wasm layered_decompose failed: ${results}`);
   }

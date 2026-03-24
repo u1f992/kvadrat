@@ -8,6 +8,8 @@ EMFLAGS := \
 	-s MODULARIZE=1 \
 	-s EXPORT_ES6=1 \
 	-s ALLOW_MEMORY_GROWTH=1 \
+	-pthread \
+	-s PTHREAD_POOL_SIZE=navigator.hardwareConcurrency \
 	-O2
 
 all: $(OUT_DIR)/core.js
@@ -18,7 +20,7 @@ $(OUT_DIR)/core.js: $(C_SOURCES) $(CPP_SOURCES) $(HEADERS)
 
 debug: $(C_SOURCES) $(CPP_SOURCES) $(HEADERS)
 	mkdir -p $(OUT_DIR)
-	em++ $(C_SOURCES) $(CPP_SOURCES) -o $(OUT_DIR)/core.js $(EMFLAGS) -DCORE_DEBUG -O0
+	em++ $(C_SOURCES) $(CPP_SOURCES) -o $(OUT_DIR)/core.js $(EMFLAGS) -DCORE_DEBUG -g -O0
 
 format:
 	clang-format -i $(C_SOURCES) $(CPP_SOURCES) $(HEADERS)

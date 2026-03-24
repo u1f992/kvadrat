@@ -25,7 +25,7 @@ typedef struct {
  * Caller must free each out_layers[i].rects, then free out_layers.
  */
 int32_t layered_decompose(const uint8_t *pixels, int32_t width, int32_t height,
-                          LayerResult **out_layers);
+                          int32_t num_threads, LayerResult **out_layers);
 
 #ifdef __cplusplus
 }
