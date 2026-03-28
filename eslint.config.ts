@@ -7,7 +7,7 @@ import tseslint from "typescript-eslint";
  * @see https://typescript-eslint.io/getting-started
  */
 const eslintConfig = defineConfig(
-  { ignores: ["**/dist/", "**/node_modules/", "src/wasm/"] },
+  { ignores: ["**/dist/", "**/node_modules/", "src/wasm/", "u1f992-temp/"] },
   eslint.configs.recommended,
   tseslint.configs.recommended,
   // https://eslint.org/docs/latest/use/configure/migration-guide#configure-language-options

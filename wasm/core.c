@@ -879,3 +879,643 @@ int32_t layered_decompose(const uint8_t *pixels, int32_t width, int32_t height,
   *out_layers = layers.items;
   return layers.len;
 }
+
+/* ── Flat decomposition (non-overlapping rects) ─────────────── */
+
+int32_t flat_decompose(const uint8_t *pixels, int32_t width, int32_t height,
+                       LayerResult **out_layers) {
+  int32_t cap = width * height;
+
+  uint32_t *palette = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
+  int32_t *indexed = (int32_t *)malloc((size_t)cap * sizeof(int32_t));
+  if (!palette || !indexed) {
+    free(palette);
+    free(indexed);
+    return CORE_ERROR_ALLOC;
+  }
+
+  int32_t num_colors = index_image(pixels, cap, palette, cap, indexed);
+  if (num_colors < 0) {
+    free(palette);
+    free(indexed);
+    return num_colors;
+  }
+
+  /* Group pixels by color */
+  IVec *groups = (IVec *)malloc((size_t)num_colors * sizeof(IVec));
+  if (!groups) {
+    free(palette);
+    free(indexed);
+    return CORE_ERROR_ALLOC;
+  }
+  for (int32_t i = 0; i < num_colors; i++)
+    iv_init(&groups[i]);
+  for (int32_t i = 0; i < cap; i++)
+    iv_push(&groups[indexed[i]], i);
+  free(indexed);
+
+  /* Decompose each color into rects */
+  LayerResult *results =
+      (LayerResult *)malloc((size_t)num_colors * sizeof(LayerResult));
+  if (!results) {
+    for (int32_t i = 0; i < num_colors; i++)
+      iv_free(&groups[i]);
+    free(groups);
+    free(palette);
+    return CORE_ERROR_ALLOC;
+  }
+
+  uint8_t *bm = (uint8_t *)calloc((size_t)cap, 1);
+  if (!bm) {
+    for (int32_t i = 0; i < num_colors; i++)
+      iv_free(&groups[i]);
+    free(groups);
+    free(palette);
+    free(results);
+    return CORE_ERROR_ALLOC;
+  }
+
+  for (int32_t c = 0; c < num_colors; c++) {
+    for (int32_t i = 0; i < groups[c].len; i++)
+      bm[groups[c].data[i]] = 1;
+
+    IVec rects;
+    iv_init(&rects);
+    decompose_region(bm, groups[c].data, groups[c].len, width, &rects);
+
+    results[c].color = palette[c];
+    results[c].rects = rects.data;
+    results[c].rects_len = rects.len;
+    iv_free(&groups[c]);
+  }
+
+  free(bm);
+  free(groups);
+  free(palette);
+  *out_layers = results;
+  return num_colors;
+}
+
+/* ── 64-bit hash table (for outline decomposition) ──────────── */
+
+typedef struct {
+  uint64_t key;
+  int32_t value;
+  uint8_t occupied;
+} HEntry64;
+
+static int32_t ht64_find(const HEntry64 *t, int32_t cap, uint64_t key) {
+  if (cap <= 0)
+    return -1;
+  uint64_t h = key;
+  h ^= h >> 33;
+  h *= 0xff51afd7ed558ccdULL;
+  h ^= h >> 33;
+  h *= 0xc4ceb9fe1a85ec53ULL;
+  h ^= h >> 33;
+  int32_t i = (int32_t)(h % (uint64_t)cap);
+  while (t[i].occupied) {
+    if (t[i].key == key)
+      return i;
+    i = (i + 1) % cap;
+  }
+  return -1;
+}
+
+static int32_t ht64_insert(HEntry64 *t, int32_t cap, uint64_t key,
+                           int32_t val) {
+  uint64_t h = key;
+  h ^= h >> 33;
+  h *= 0xff51afd7ed558ccdULL;
+  h ^= h >> 33;
+  h *= 0xc4ceb9fe1a85ec53ULL;
+  h ^= h >> 33;
+  int32_t i = (int32_t)(h % (uint64_t)cap);
+  while (t[i].occupied) {
+    if (t[i].key == key)
+      return i;
+    i = (i + 1) % cap;
+  }
+  t[i].key = key;
+  t[i].value = val;
+  t[i].occupied = 1;
+  return i;
+}
+
+static void ht64_remove(HEntry64 *t, int32_t cap, int32_t idx) {
+  if (cap <= 0)
+    return;
+  t[idx].occupied = 0;
+  int32_t next = (idx + 1) % cap;
+  while (t[next].occupied) {
+    uint64_t k = t[next].key;
+    int32_t v = t[next].value;
+    t[next].occupied = 0;
+    ht64_insert(t, cap, k, v);
+    next = (next + 1) % cap;
+  }
+}
+
+/* ── Outline helpers ────────────────────────────────────────── */
+
+static inline uint64_t encode_edge_key(int32_t x1, int32_t y1, int32_t x2,
+                                       int32_t y2) {
+  return ((uint64_t)(uint16_t)x1 << 48) | ((uint64_t)(uint16_t)y1 << 32) |
+         ((uint64_t)(uint16_t)x2 << 16) | (uint16_t)y2;
+}
+
+static inline uint64_t point_key(int32_t x, int32_t y) {
+  return ((uint64_t)(uint16_t)x << 16) | (uint16_t)y;
+}
+
+static int32_t remove_bidirectional_edges(int32_t *edges, int32_t edge_count) {
+  if (edge_count <= 0)
+    return 0;
+
+  int32_t capacity = edge_count * 2;
+  HEntry64 *table = (HEntry64 *)calloc((size_t)capacity, sizeof(HEntry64));
+  uint8_t *to_remove = (uint8_t *)calloc((size_t)edge_count, 1);
+  if (!table || !to_remove) {
+    free(table);
+    free(to_remove);
+    return CORE_ERROR_ALLOC;
+  }
+
+  for (int32_t i = 0; i < edge_count; i++) {
+    int32_t off = i * 4;
+    uint64_t reverse_key = encode_edge_key(edges[off + 2], edges[off + 3],
+                                           edges[off], edges[off + 1]);
+    int32_t found = ht64_find(table, capacity, reverse_key);
+    if (found >= 0) {
+      to_remove[i] = 1;
+      to_remove[table[found].value] = 1;
+      ht64_remove(table, capacity, found);
+    } else {
+      uint64_t key = encode_edge_key(edges[off], edges[off + 1], edges[off + 2],
+                                     edges[off + 3]);
+      ht64_insert(table, capacity, key, i);
+    }
+  }
+
+  int32_t write_index = 0;
+  for (int32_t i = 0; i < edge_count; i++) {
+    if (!to_remove[i]) {
+      if (write_index != i) {
+        int32_t r = i * 4, w = write_index * 4;
+        edges[w] = edges[r];
+        edges[w + 1] = edges[r + 1];
+        edges[w + 2] = edges[r + 2];
+        edges[w + 3] = edges[r + 3];
+      }
+      write_index++;
+    }
+  }
+
+  free(table);
+  free(to_remove);
+  return write_index;
+}
+
+static inline int32_t emit_point(int32_t *out, int32_t *out_pos,
+                                 int32_t out_capacity, int32_t x, int32_t y) {
+  if (*out_pos + 2 > out_capacity)
+    return -1;
+  out[(*out_pos)++] = x;
+  out[(*out_pos)++] = y;
+  return 0;
+}
+
+static int32_t build_polygons(const int32_t *edges, int32_t edge_count,
+                              int32_t *out, int32_t out_capacity) {
+  if (edge_count <= 0)
+    return 0;
+
+  int32_t adj_capacity = edge_count * 2;
+  HEntry64 *adj = (HEntry64 *)calloc((size_t)adj_capacity, sizeof(HEntry64));
+  int32_t *next_same_start =
+      (int32_t *)malloc((size_t)edge_count * sizeof(int32_t));
+  uint8_t *used = (uint8_t *)calloc((size_t)edge_count, 1);
+  if (!adj || !next_same_start || !used) {
+    free(adj);
+    free(next_same_start);
+    free(used);
+    return CORE_ERROR_ALLOC;
+  }
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+  memset(next_same_start, -1, (size_t)edge_count * sizeof(int32_t));
+
+  for (int32_t i = 0; i < edge_count; i++) {
+    int32_t off = i * 4;
+    uint64_t key = point_key(edges[off], edges[off + 1]);
+    int32_t found = ht64_find(adj, adj_capacity, key);
+    if (found >= 0) {
+      next_same_start[i] = adj[found].value;
+      adj[found].value = i;
+    } else {
+      ht64_insert(adj, adj_capacity, key, i);
+    }
+  }
+
+  int32_t remaining = edge_count;
+  int32_t start_scan = 0;
+  int32_t out_pos = 0;
+
+  while (remaining > 0) {
+    while (used[start_scan])
+      start_scan++;
+
+    int32_t count_pos = out_pos++;
+    if (out_pos >= out_capacity) {
+      free(adj);
+      free(next_same_start);
+      free(used);
+      return CORE_ERROR_CAPACITY;
+    }
+
+    int32_t point_count = 0;
+    used[start_scan] = 1;
+    remaining--;
+
+    int32_t off = start_scan * 4;
+    int32_t first_x = edges[off], first_y = edges[off + 1];
+    int32_t cur_x = edges[off + 2], cur_y = edges[off + 3];
+
+    if (emit_point(out, &out_pos, out_capacity, first_x, first_y) < 0 ||
+        emit_point(out, &out_pos, out_capacity, cur_x, cur_y) < 0) {
+      free(adj);
+      free(next_same_start);
+      free(used);
+      return CORE_ERROR_CAPACITY;
+    }
+    point_count += 2;
+
+    int32_t prev_x = first_x, prev_y = first_y;
+    int32_t last_x = cur_x, last_y = cur_y;
+
+    do {
+      uint64_t key = point_key(cur_x, cur_y);
+      int32_t slot = ht64_find(adj, adj_capacity, key);
+      int32_t found_edge = -1;
+
+      if (slot >= 0) {
+        int32_t idx = adj[slot].value;
+        while (idx >= 0) {
+          if (!used[idx]) {
+            found_edge = idx;
+            break;
+          }
+          idx = next_same_start[idx];
+        }
+      }
+
+      if (found_edge < 0) {
+        free(adj);
+        free(next_same_start);
+        free(used);
+        return CORE_ERROR_BROKEN_CHAIN;
+      }
+
+      used[found_edge] = 1;
+      remaining--;
+      off = found_edge * 4;
+      int32_t new_x = edges[off + 2], new_y = edges[off + 3];
+
+      if (prev_x == last_x && last_x == new_x) {
+        out[out_pos - 1] = new_y;
+        last_y = new_y;
+      } else if (prev_y == last_y && last_y == new_y) {
+        out[out_pos - 2] = new_x;
+        last_x = new_x;
+      } else {
+        prev_x = last_x;
+        prev_y = last_y;
+        last_x = new_x;
+        last_y = new_y;
+        if (emit_point(out, &out_pos, out_capacity, new_x, new_y) < 0) {
+          free(adj);
+          free(next_same_start);
+          free(used);
+          return CORE_ERROR_CAPACITY;
+        }
+        point_count++;
+      }
+
+      cur_x = new_x;
+      cur_y = new_y;
+    } while (!(cur_x == first_x && cur_y == first_y));
+
+    /* Adjust start/end if collinear */
+    int32_t p0_x = out[count_pos + 1], p0_y = out[count_pos + 2];
+    int32_t p1_x = out[count_pos + 3], p1_y = out[count_pos + 4];
+    int32_t pn_x = out[out_pos - 4], pn_y = out[out_pos - 3];
+
+    if (p0_x == p1_x && pn_x == p0_x) {
+      point_count--;
+      out_pos -= 2;
+      out[count_pos + 2] = pn_y;
+    } else if (p0_y == p1_y && pn_y == p0_y) {
+      point_count--;
+      out_pos -= 2;
+      out[count_pos + 1] = pn_x;
+    }
+
+    out[count_pos] = point_count;
+  }
+
+  free(adj);
+  free(next_same_start);
+  free(used);
+  return out_pos;
+}
+
+static int32_t poly_count(const int32_t *buf, int32_t buf_len) {
+  int32_t count = 0, pos = 0;
+  while (pos < buf_len) {
+    pos += 1 + buf[pos] * 2;
+    count++;
+  }
+  return count;
+}
+
+static int32_t concat_polygons(int32_t *buf, int32_t buf_len,
+                               int32_t buf_capacity) {
+  int32_t num_polys = poly_count(buf, buf_len);
+  if (num_polys <= 1)
+    return buf_len;
+
+  int32_t *offsets = (int32_t *)malloc((size_t)num_polys * sizeof(int32_t));
+  if (!offsets)
+    return CORE_ERROR_ALLOC;
+  {
+    int32_t pos = 0;
+    for (int32_t n = 0; n < num_polys; n++) {
+      offsets[n] = pos;
+      pos += 1 + buf[pos] * 2;
+    }
+  }
+
+  for (int32_t i = 0; i < num_polys; i++) {
+    int32_t i_off = offsets[i];
+    int32_t i_pc = buf[i_off];
+    int32_t i_pts = i_off + 1;
+
+    for (int32_t j = 0; j < i_pc; j++) {
+      int32_t jx = buf[i_pts + j * 2];
+      int32_t jy = buf[i_pts + j * 2 + 1];
+
+      for (int32_t k = i + 1; k < num_polys; k++) {
+        int32_t k_off = offsets[k];
+        int32_t k_pc = buf[k_off];
+        int32_t k_pts = k_off + 1;
+        int32_t k_size = 1 + k_pc * 2;
+
+        for (int32_t l = 0; l < k_pc - 1; l++) {
+          if (buf[k_pts + l * 2] != jx || buf[k_pts + l * 2 + 1] != jy)
+            continue;
+
+          int32_t *k_copy = (int32_t *)malloc((size_t)k_size * sizeof(int32_t));
+          if (!k_copy) {
+            free(offsets);
+            return CORE_ERROR_ALLOC;
+          }
+          // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+          memcpy(k_copy, buf + k_off, (size_t)k_size * sizeof(int32_t));
+
+          int32_t after_k = k_off + k_size;
+          // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+          memmove(buf + k_off, buf + after_k,
+                  (size_t)(buf_len - after_k) * sizeof(int32_t));
+          buf_len -= k_size;
+
+          for (int32_t n = k; n < num_polys - 1; n++)
+            offsets[n] = offsets[n + 1] - k_size;
+          num_polys--;
+
+          int32_t insert_count = k_pc - 1;
+          int32_t insert_elems = insert_count * 2;
+          int32_t insert_pos = i_pts + (j + 1) * 2;
+          int32_t tail_len = buf_len - insert_pos;
+
+          if (buf_len + insert_elems > buf_capacity) {
+            free(k_copy);
+            free(offsets);
+            return CORE_ERROR_CAPACITY;
+          }
+          // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+          memmove(buf + insert_pos + insert_elems, buf + insert_pos,
+                  (size_t)tail_len * sizeof(int32_t));
+          buf_len += insert_elems;
+
+          for (int32_t n = i + 1; n < num_polys; n++)
+            offsets[n] += insert_elems;
+
+          int32_t wp = insert_pos;
+          for (int32_t m = l + 1; m < k_pc; m++) {
+            buf[wp++] = k_copy[1 + m * 2];
+            buf[wp++] = k_copy[1 + m * 2 + 1];
+          }
+          if (l > 0) {
+            for (int32_t m = 1; m <= l; m++) {
+              buf[wp++] = k_copy[1 + m * 2];
+              buf[wp++] = k_copy[1 + m * 2 + 1];
+            }
+          }
+
+          free(k_copy);
+
+          buf[i_off] = i_pc + insert_count;
+          i_pc = buf[i_off];
+          i_pts = i_off + 1;
+          k--;
+          break;
+        }
+      }
+    }
+  }
+
+  free(offsets);
+  return buf_len;
+}
+
+/* ── Outline decomposition (non-overlapping polygons) ───────── */
+
+int32_t outline_decompose(const uint8_t *pixels, int32_t width, int32_t height,
+                          OutlineResult **out_results) {
+  int32_t cap = width * height;
+
+  uint32_t *palette = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
+  int32_t *indexed = (int32_t *)malloc((size_t)cap * sizeof(int32_t));
+  if (!palette || !indexed) {
+    free(palette);
+    free(indexed);
+    return CORE_ERROR_ALLOC;
+  }
+
+  int32_t num_colors = index_image(pixels, cap, palette, cap, indexed);
+  if (num_colors < 0) {
+    free(palette);
+    free(indexed);
+    return num_colors;
+  }
+
+  /* Count pixels per color */
+  // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI)
+  int32_t *counts = (int32_t *)calloc((size_t)num_colors, sizeof(int32_t));
+  if (!counts) {
+    free(palette);
+    free(indexed);
+    return CORE_ERROR_ALLOC;
+  }
+  for (int32_t i = 0; i < cap; i++)
+    counts[indexed[i]]++;
+
+  /* Allocate per-color edge buffers (max 4 edges * 4 ints per pixel) */
+  int32_t **edge_bufs =
+      (int32_t **)calloc((size_t)num_colors, sizeof(int32_t *));
+  int32_t *edge_offs = (int32_t *)calloc((size_t)num_colors, sizeof(int32_t));
+  if (!edge_bufs || !edge_offs) {
+    free(palette);
+    free(indexed);
+    free(counts);
+    free(edge_bufs);
+    free(edge_offs);
+    return CORE_ERROR_ALLOC;
+  }
+
+  for (int32_t c = 0; c < num_colors; c++) {
+    // clang-format off
+    edge_bufs[c] =
+        (int32_t *)malloc((size_t)counts[c] * 16 * sizeof(int32_t)); // NOLINT(clang-analyzer-optin.portability.UnixAPI)
+    // clang-format on
+    if (!edge_bufs[c]) {
+      for (int32_t j = 0; j < c; j++)
+        free(edge_bufs[j]);
+      free(edge_bufs);
+      free(edge_offs);
+      free(counts);
+      free(palette);
+      free(indexed);
+      return CORE_ERROR_ALLOC;
+    }
+  }
+  free(counts);
+
+  /* Generate 4 edges per pixel */
+  for (int32_t y = 0; y < height; y++) {
+    for (int32_t x = 0; x < width; x++) {
+      // clang-format off
+      int32_t c = indexed[y * width + x]; // NOLINT(clang-analyzer-core.uninitialized.Assign)
+      // clang-format on
+      int32_t *buf = edge_bufs[c];
+      int32_t off = edge_offs[c];
+      /* top */
+      buf[off++] = x;
+      buf[off++] = y;
+      buf[off++] = x + 1;
+      buf[off++] = y;
+      /* right */
+      buf[off++] = x + 1;
+      buf[off++] = y;
+      buf[off++] = x + 1;
+      buf[off++] = y + 1;
+      /* bottom */
+      buf[off++] = x + 1;
+      buf[off++] = y + 1;
+      buf[off++] = x;
+      buf[off++] = y + 1;
+      /* left */
+      buf[off++] = x;
+      buf[off++] = y + 1;
+      buf[off++] = x;
+      buf[off++] = y;
+      edge_offs[c] = off;
+    }
+  }
+  free(indexed);
+
+  /* Process each color: remove bidirectional → build polygons → concat */
+  OutlineResult *results =
+      (OutlineResult *)malloc((size_t)num_colors * sizeof(OutlineResult));
+  if (!results) {
+    for (int32_t c = 0; c < num_colors; c++)
+      free(edge_bufs[c]);
+    free(edge_bufs);
+    free(edge_offs);
+    free(palette);
+    return CORE_ERROR_ALLOC;
+  }
+
+  for (int32_t c = 0; c < num_colors; c++) {
+    int32_t edge_count = edge_offs[c] / 4;
+    int32_t *edges = edge_bufs[c];
+
+    int32_t new_ec = remove_bidirectional_edges(edges, edge_count);
+    if (new_ec < 0) {
+      for (int32_t j = c; j < num_colors; j++)
+        free(edge_bufs[j]);
+      for (int32_t j = 0; j < c; j++)
+        free(results[j].polygons);
+      free(results);
+      free(edge_bufs);
+      free(edge_offs);
+      free(palette);
+      return new_ec;
+    }
+
+    int32_t out_cap = new_ec * 11;
+    // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI)
+    int32_t *poly_buf = (int32_t *)malloc((size_t)out_cap * sizeof(int32_t));
+    if (!poly_buf) {
+      for (int32_t j = c; j < num_colors; j++)
+        free(edge_bufs[j]);
+      for (int32_t j = 0; j < c; j++)
+        free(results[j].polygons);
+      free(results);
+      free(edge_bufs);
+      free(edge_offs);
+      free(palette);
+      return CORE_ERROR_ALLOC;
+    }
+
+    int32_t buf_len = build_polygons(edges, new_ec, poly_buf, out_cap);
+    free(edges);
+    edge_bufs[c] = NULL;
+
+    if (buf_len < 0) {
+      free(poly_buf);
+      for (int32_t j = c + 1; j < num_colors; j++)
+        free(edge_bufs[j]);
+      for (int32_t j = 0; j < c; j++)
+        free(results[j].polygons);
+      free(results);
+      free(edge_bufs);
+      free(edge_offs);
+      free(palette);
+      return buf_len;
+    }
+
+    int32_t final_len = concat_polygons(poly_buf, buf_len, out_cap);
+    if (final_len < 0) {
+      free(poly_buf);
+      for (int32_t j = c + 1; j < num_colors; j++)
+        free(edge_bufs[j]);
+      for (int32_t j = 0; j < c; j++)
+        free(results[j].polygons);
+      free(results);
+      free(edge_bufs);
+      free(edge_offs);
+      free(palette);
+      return final_len;
+    }
+
+    results[c].color = palette[c];
+    results[c].polygons = poly_buf;
+    results[c].polygons_len = final_len;
+  }
+
+  free(edge_bufs);
+  free(edge_offs);
+  free(palette);
+  *out_results = results;
+  return num_colors;
+}

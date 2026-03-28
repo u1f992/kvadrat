@@ -19,8 +19,14 @@ export type JimpImageCompat = {
 
 export type Rect = { x: number; y: number; w: number; h: number };
 
-export type Layer = {
+export type Point = [number, number];
+
+export type PolygonLayer = {
   color: number; // RGBA packed as uint32 (R high, A low)
+  polygons: Point[][];
+};
+
+export type RectLayer = PolygonLayer & {
   rects: Rect[];
 };
 
@@ -59,7 +65,7 @@ function svgFillAttrs(rgba: number, fillOpacity: boolean): string {
   return `fill="${rgbaToHex(rgba)}"`;
 }
 
-/* ─── Layered decomposition (Wasm) ───────────────────────────── */
+/* ─── Pixel helpers ──────────────────────────────────────────── */
 
 function normalizePixels(
   data: Buffer | Uint8Array | Uint8ClampedArray | number[],
@@ -67,6 +73,19 @@ function normalizePixels(
   if (data instanceof Uint8Array) return data;
   return new Uint8Array(data);
 }
+
+/* ─── Rect → Polygon conversion ─────────────────────────────── */
+
+export function rectsToPolygons(rects: Rect[]): Point[][] {
+  return rects.map(({ x, y, w, h }) => [
+    [x, y],
+    [x + w, y],
+    [x + w, y + h],
+    [x, y + h],
+  ]);
+}
+
+/* ─── Decomposition: parsers ─────────────────────────────────── */
 
 function parseFlatRects(buf: Int32Array): Rect[] {
   const rects: Rect[] = [];
@@ -76,9 +95,27 @@ function parseFlatRects(buf: Int32Array): Rect[] {
   return rects;
 }
 
-export async function layeredDecompose(image: JimpImageCompat): Promise<{
-  layers: Layer[];
-}> {
+function parseFlatPolygons(buf: Int32Array): Point[][] {
+  const polygons: Point[][] = [];
+  let pos = 0;
+  while (pos < buf.length) {
+    const pc = buf[pos]!;
+    pos++;
+    const polygon: Point[] = [];
+    for (let i = 0; i < pc; i++) {
+      polygon.push([buf[pos + i * 2]!, buf[pos + i * 2 + 1]!]);
+    }
+    pos += pc * 2;
+    polygons.push(polygon);
+  }
+  return polygons;
+}
+
+/* ─── Decomposition: layered (overlapping) ───────────────────── */
+
+export async function decomposeLayered(
+  image: JimpImageCompat,
+): Promise<RectLayer[]> {
   const wasm = await getModule();
   const pixels = normalizePixels(image.bitmap.data);
   const results = wasm.processImage(
@@ -90,14 +127,60 @@ export async function layeredDecompose(image: JimpImageCompat): Promise<{
   if (typeof results === "number" && results < 0) {
     throw new Error(`wasm layered_decompose failed: ${results}`);
   }
-  const layers: Layer[] = [];
+  const layers: RectLayer[] = [];
+  for (const entry of results) {
+    const rects = parseFlatRects(entry.rects);
+    layers.push({
+      color: entry.color,
+      rects,
+      polygons: rectsToPolygons(rects),
+    });
+  }
+  return layers;
+}
+
+/* ─── Decomposition: flat (non-overlapping rects) ────────────── */
+
+export async function decomposeFlat(
+  image: JimpImageCompat,
+): Promise<RectLayer[]> {
+  const wasm = await getModule();
+  const pixels = normalizePixels(image.bitmap.data);
+  const results = wasm.processImageFlat(pixels, image.width, image.height);
+  if (typeof results === "number" && results < 0) {
+    throw new Error(`wasm flat_decompose failed: ${results}`);
+  }
+  const layers: RectLayer[] = [];
+  for (const entry of results) {
+    const rects = parseFlatRects(entry.rects);
+    layers.push({
+      color: entry.color,
+      rects,
+      polygons: rectsToPolygons(rects),
+    });
+  }
+  return layers;
+}
+
+/* ─── Decomposition: outline (non-overlapping polygons) ──────── */
+
+export async function decomposeOutline(
+  image: JimpImageCompat,
+): Promise<PolygonLayer[]> {
+  const wasm = await getModule();
+  const pixels = normalizePixels(image.bitmap.data);
+  const results = wasm.processImageOutline(pixels, image.width, image.height);
+  if (typeof results === "number" && results < 0) {
+    throw new Error(`wasm outline_decompose failed: ${results}`);
+  }
+  const layers: PolygonLayer[] = [];
   for (const entry of results) {
     layers.push({
       color: entry.color,
-      rects: parseFlatRects(entry.rects),
+      polygons: parseFlatPolygons(entry.polygons),
     });
   }
-  return { layers };
+  return layers;
 }
 
 /* ─── Renderers ──────────────────────────────────────────────── */
@@ -114,8 +197,45 @@ export type SVGOptions = {
   fillOpacity?: boolean;
 };
 
+function generateSVGPathDataFromPolygons(polygons: Point[][]): string {
+  return polygons
+    .map((polygon) => {
+      if (polygon.length === 0) return "";
+      let d = `M${polygon[0]![0]},${polygon[0]![1]}`;
+      for (let i = 1; i < polygon.length; i++) {
+        const [x, y] = polygon[i]!;
+        const [px, py] = polygon[i - 1]!;
+        if (x === px) {
+          d += `v${y - py}`;
+        } else {
+          d += `h${x - px}`;
+        }
+      }
+      d += "z";
+      return d;
+    })
+    .join("");
+}
+
 export function renderAsSVGPolygon(
-  layers: Layer[],
+  layers: PolygonLayer[],
+  width: number,
+  height: number,
+  options: SVGOptions = {},
+): string {
+  const { fillOpacity = true } = options;
+  let svg = svgHeader(width, height);
+  for (const { color, polygons } of layers) {
+    if (polygons.length === 0) continue;
+    const d = generateSVGPathDataFromPolygons(polygons);
+    svg += `<path ${svgFillAttrs(color, fillOpacity)} d="${d}"/>`;
+  }
+  svg += "</svg>";
+  return svg;
+}
+
+export function renderAsSVGPath(
+  layers: RectLayer[],
   width: number,
   height: number,
   options: SVGOptions = {},
@@ -135,7 +255,7 @@ export function renderAsSVGPolygon(
 }
 
 export function renderAsSVGRect(
-  layers: Layer[],
+  layers: RectLayer[],
   width: number,
   height: number,
   options: SVGOptions = {},
@@ -159,7 +279,7 @@ export type CSSBackgroundOptions = {
 };
 
 export function renderAsCSSBackground(
-  layers: Layer[],
+  layers: RectLayer[],
   width: number,
   height: number,
   options: CSSBackgroundOptions = {},

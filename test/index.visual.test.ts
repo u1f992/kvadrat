@@ -5,16 +5,15 @@ import path from "node:path";
 import { Jimp } from "jimp";
 import puppeteer, { Browser } from "puppeteer";
 import {
-  layeredDecompose,
+  decomposeLayered,
+  decomposeFlat,
+  decomposeOutline,
+  renderAsSVGPath,
   renderAsSVGPolygon,
   renderAsSVGRect,
   renderAsCSSBackground,
 } from "../src/index.ts";
-import type {
-  JimpImageCompat,
-  Layer,
-  CSSBackgroundOptions,
-} from "../src/index.ts";
+import type { JimpImageCompat } from "../src/index.ts";
 
 let browser: Browser;
 
@@ -43,7 +42,10 @@ async function renderInBrowser(
   await page.setViewport({ width, height, deviceScaleFactor: 1 });
   const tmpDir = path.join(import.meta.dirname, "..", ".vrt-tmp");
   fs.mkdirSync(tmpDir, { recursive: true });
-  const tmp = path.join(tmpDir, `${Date.now()}.${ext}`);
+  const tmp = path.join(
+    tmpDir,
+    `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`,
+  );
   fs.writeFileSync(tmp, content, "utf-8");
   await page.goto("file://" + tmp, { waitUntil: "load" });
   const buf = await page.screenshot({ type: "png", omitBackground: true });
@@ -61,28 +63,17 @@ function renderCSS(css: string, w: number, h: number, selector: string) {
   return renderInBrowser(html, w, h, "html");
 }
 
-type Renderer = (
-  layers: Layer[],
-  w: number,
-  h: number,
-  opts?: Record<string, unknown>,
-) => string;
-
 async function assertPixelPerfect(
   image: JimpImageCompat & { getPixelColor(x: number, y: number): number },
-  renderer: Renderer,
+  svgOrCss: string,
   renderMode: "svg" | "css",
-  rendererOpts?: Record<string, unknown>,
-): Promise<{ rects: number; layers: number }> {
-  const { layers } = await layeredDecompose(image);
+  selector: string = ".image",
+): Promise<void> {
   const { width, height } = image;
-  const output = renderer(layers, width, height, rendererOpts);
-
-  const selector = (rendererOpts?.selector as string | undefined) ?? ".image";
   const pngBuf =
     renderMode === "css"
-      ? await renderCSS(output, width, height, selector)
-      : await renderSVG(output, width, height);
+      ? await renderCSS(svgOrCss, width, height, selector)
+      : await renderSVG(svgOrCss, width, height);
   const rendered = await Jimp.read(pngBuf);
 
   let diff = 0;
@@ -91,9 +82,6 @@ async function assertPixelPerfect(
       if (rendered.getPixelColor(x, y) !== image.getPixelColor(x, y)) diff++;
 
   assert.equal(diff, 0, `${diff} pixels differ out of ${width * height}`);
-
-  const nRects = layers.reduce((s: number, l: Layer) => s + l.rects.length, 0);
-  return { rects: nRects, layers: layers.length };
 }
 
 async function loadImage() {
@@ -101,51 +89,135 @@ async function loadImage() {
   return Jimp.read(inputPath);
 }
 
+/* ─── Test definitions ───────────────────────────────────────── */
+
+type DecomposeAndRender = (
+  image: JimpImageCompat,
+) => Promise<{ output: string; mode: "svg" | "css"; selector?: string }>;
+
+const pipelines: [string, DecomposeAndRender][] = [
+  [
+    "layered-path",
+    async (image) => {
+      const layers = await decomposeLayered(image);
+      return {
+        output: renderAsSVGPath(layers, image.width, image.height),
+        mode: "svg",
+      };
+    },
+  ],
+  [
+    "layered-rect",
+    async (image) => {
+      const layers = await decomposeLayered(image);
+      return {
+        output: renderAsSVGRect(layers, image.width, image.height),
+        mode: "svg",
+      };
+    },
+  ],
+  [
+    "layered-polygon",
+    async (image) => {
+      const layers = await decomposeLayered(image);
+      return {
+        output: renderAsSVGPolygon(layers, image.width, image.height),
+        mode: "svg",
+      };
+    },
+  ],
+  [
+    "flat-path",
+    async (image) => {
+      const layers = await decomposeFlat(image);
+      return {
+        output: renderAsSVGPath(layers, image.width, image.height),
+        mode: "svg",
+      };
+    },
+  ],
+  [
+    "flat-rect",
+    async (image) => {
+      const layers = await decomposeFlat(image);
+      return {
+        output: renderAsSVGRect(layers, image.width, image.height),
+        mode: "svg",
+      };
+    },
+  ],
+  [
+    "flat-polygon",
+    async (image) => {
+      const layers = await decomposeFlat(image);
+      return {
+        output: renderAsSVGPolygon(layers, image.width, image.height),
+        mode: "svg",
+      };
+    },
+  ],
+  [
+    "outline-polygon",
+    async (image) => {
+      const layers = await decomposeOutline(image);
+      return {
+        output: renderAsSVGPolygon(layers, image.width, image.height),
+        mode: "svg",
+      };
+    },
+  ],
+  [
+    "layered-css-gradient",
+    async (image) => {
+      const layers = await decomposeLayered(image);
+      return {
+        output: renderAsCSSBackground(layers, image.width, image.height, {
+          selector: ".image",
+          material: "linear-gradient",
+        }),
+        mode: "css",
+        selector: ".image",
+      };
+    },
+  ],
+  [
+    "layered-css-svg",
+    async (image) => {
+      const layers = await decomposeLayered(image);
+      return {
+        output: renderAsCSSBackground(layers, image.width, image.height, {
+          selector: ".image",
+          material: "svg",
+        }),
+        mode: "css",
+        selector: ".image",
+      };
+    },
+  ],
+];
+
 /* ─── Tests ──────────────────────────────────────────────────── */
 
-const renderers: [string, Renderer, "svg" | "css", Record<string, unknown>?][] =
-  [
-    ["path", renderAsSVGPolygon as Renderer, "svg"],
-    ["rect", renderAsSVGRect as Renderer, "svg"],
-    [
-      "css-gradient",
-      (l, w, h, o) => renderAsCSSBackground(l, w, h, o as CSSBackgroundOptions),
-      "css",
-      { selector: ".image", material: "linear-gradient" },
-    ],
-    [
-      "css-svg",
-      (l, w, h, o) => renderAsCSSBackground(l, w, h, o as CSSBackgroundOptions),
-      "css",
-      { selector: ".image", material: "svg" },
-    ],
-  ];
-
 describe("visual regression", () => {
-  for (const [name, renderer, mode, opts] of renderers) {
+  for (const [name, pipeline] of pipelines) {
     test(`${name}: 50×50 crop`, async () => {
       const image = await loadImage();
       const crop = image.clone().crop({ x: 0, y: 0, w: 50, h: 50 });
-      const { rects } = await assertPixelPerfect(crop, renderer, mode, opts);
-      console.log(`  ${name} 50×50: ${rects} rects`);
+      const { output, mode, selector } = await pipeline(crop);
+      await assertPixelPerfect(crop, output, mode, selector);
     });
 
     test(`${name}: 200×100 crop`, async () => {
       const image = await loadImage();
       const crop = image.clone().crop({ x: 0, y: 0, w: 200, h: 100 });
-      const { rects } = await assertPixelPerfect(crop, renderer, mode, opts);
-      console.log(`  ${name} 200×100: ${rects} rects`);
+      const { output, mode, selector } = await pipeline(crop);
+      await assertPixelPerfect(crop, output, mode, selector);
     });
 
     test(`${name}: full 1390×900`, async () => {
       const image = await loadImage();
-      const { rects, layers } = await assertPixelPerfect(
-        image,
-        renderer,
-        mode,
-        opts,
-      );
-      console.log(`  ${name} full: ${rects} rects, ${layers} layers`);
+      const { output, mode, selector } = await pipeline(image);
+      await assertPixelPerfect(image, output, mode, selector);
     });
   }
 });
