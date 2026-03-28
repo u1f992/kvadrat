@@ -1,6 +1,6 @@
 {
   "name": "@u1f992/kvadrat",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "main": "dist/index.js",
   "bin": {
     "kvadrat": "dist/cli.js"
