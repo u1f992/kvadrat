@@ -16,10 +16,19 @@
         <input type="file" id="file" accept="image/*" required />
       </div>
       <div>
-        <label for="mode">Mode:</label>
-        <select id="mode">
+        <label for="decompose">Decompose:</label>
+        <select id="decompose">
+          <option value="layered">layered</option>
+          <option value="flat">flat</option>
+          <option value="outline">outline</option>
+        </select>
+      </div>
+      <div>
+        <label for="format">Format:</label>
+        <select id="format">
+          <option value="path">path</option>
+          <option value="rect">rect</option>
           <option value="polygon">polygon</option>
-          <option value="rectangle">rectangle</option>
           <option value="css-background">css-background</option>
         </select>
       </div>
@@ -44,7 +53,10 @@
 
     <script type="module">
       import {
-        layeredDecompose,
+        decomposeLayered,
+        decomposeFlat,
+        decomposeOutline,
+        renderAsSVGPath,
         renderAsSVGPolygon,
         renderAsSVGRect,
         renderAsCSSBackground,
@@ -55,21 +67,39 @@
 
       const form = document.getElementById("form");
       const fileInput = document.getElementById("file");
-      const modeSelect = document.getElementById("mode");
+      const decomposeSelect = document.getElementById("decompose");
+      const formatSelect = document.getElementById("format");
       const materialSelect = document.getElementById("material");
       const selectorInput = document.getElementById("selector");
       const runButton = document.getElementById("run");
       const result = document.getElementById("result");
-
       const rgbaCheckbox = document.getElementById("rgba");
 
       function updateDisabledState() {
-        const isCss = modeSelect.value === "css-background";
+        const dec = decomposeSelect.value;
+        const fmt = formatSelect.value;
+        const isCss = fmt === "css-background";
+        const isOutline = dec === "outline";
+
+        // outline forces polygon format
+        if (isOutline) {
+          formatSelect.value = "polygon";
+        }
+        // polygon format only valid with outline
+        for (const opt of formatSelect.options) {
+          if (opt.value === "polygon") {
+            opt.disabled = !isOutline;
+          } else {
+            opt.disabled = isOutline;
+          }
+        }
+
         materialSelect.disabled = !isCss;
         selectorInput.disabled = !isCss;
         rgbaCheckbox.disabled = isCss;
       }
-      modeSelect.addEventListener("change", updateDisabledState);
+      decomposeSelect.addEventListener("change", updateDisabledState);
+      formatSelect.addEventListener("change", updateDisabledState);
       updateDisabledState();
 
       function loadImage(file) {
@@ -110,15 +140,30 @@
         runButton.textContent = "Processing...";
         try {
           const image = await loadImage(file);
+          const dec = decomposeSelect.value;
+          const fmt = dec === "outline" ? "polygon" : formatSelect.value;
           const t0 = performance.now();
-          const { layers } = await layeredDecompose(image);
+
+          let layers;
+          if (dec === "outline") {
+            layers = await decomposeOutline(image);
+          } else if (dec === "flat") {
+            layers = await decomposeFlat(image);
+          } else {
+            layers = await decomposeLayered(image);
+          }
           const dt = performance.now() - t0;
-          document.getElementById("info").textContent = `${image.width}x${image.height}, ${layers.length} layers, ${layers.reduce((s,l) => s + l.rects.length, 0)} rects, ${dt.toFixed(0)}ms`;
-          const mode = modeSelect.value;
+
+          const isRect = "rects" in (layers[0] || {});
+          const count = isRect
+            ? layers.reduce((s, l) => s + l.rects.length, 0) + " rects"
+            : layers.reduce((s, l) => s + l.polygons.length, 0) + " polygons";
+          document.getElementById("info").textContent =
+            `${image.width}x${image.height}, ${layers.length} layers, ${count}, ${dt.toFixed(0)}ms`;
 
           let preview, output;
 
-          if (mode === "css-background") {
+          if (fmt === "css-background") {
             const selector = selectorInput.value || ".image";
             const material = materialSelect.value;
             preview = renderAsCSSBackground(
@@ -130,15 +175,19 @@
               { selector, material },
             );
           } else {
-            const svgOptions = { fillOpacity: !document.getElementById("rgba").checked };
-            output = mode === "rectangle"
-              ? renderAsSVGRect(layers, image.width, image.height, svgOptions)
-              : renderAsSVGPolygon(layers, image.width, image.height, svgOptions);
+            const svgOptions = { fillOpacity: !rgbaCheckbox.checked };
+            if (fmt === "rect") {
+              output = renderAsSVGRect(layers, image.width, image.height, svgOptions);
+            } else if (fmt === "polygon") {
+              output = renderAsSVGPolygon(layers, image.width, image.height, svgOptions);
+            } else {
+              output = renderAsSVGPath(layers, image.width, image.height, svgOptions);
+            }
             preview = output;
           }
 
           // Preview
-          if (mode === "css-background") {
+          if (fmt === "css-background") {
             const style = document.createElement("style");
             style.textContent = preview;
             result.appendChild(style);
